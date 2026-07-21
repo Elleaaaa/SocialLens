@@ -6,7 +6,8 @@ import secrets
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "monitor.db"
+DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
+DB_PATH = DATA_DIR / "monitor.db"
 LOCAL_TIMEZONE_OFFSET = int(os.environ.get("LOCAL_TIMEZONE_OFFSET", "8"))
 
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
