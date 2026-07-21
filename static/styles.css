@@ -1,0 +1,327 @@
+:root {
+  --bg: #0b0f1a;
+  --panel: #121829;
+  --panel-2: #1a2236;
+  --border: #243049;
+  --text: #e6ebf5;
+  --muted: #8a96b0;
+  --accent: #5b8cff;
+  --green: #34d399;
+  --amber: #fbbf24;
+  --red: #f87171;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text)
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif
+}
+
+.card {
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border: 1px solid var(--border)
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border)
+}
+
+.live {
+  color: var(--green);
+  border-color: rgba(52, 211, 153, .4);
+  background: rgba(52, 211, 153, .1)
+}
+
+.busy {
+  color: var(--amber);
+  border-color: rgba(251, 191, 36, .4);
+  background: rgba(251, 191, 36, .1)
+}
+
+.new-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--green);
+  border: 1px solid rgba(52, 211, 153, .3);
+  background: rgba(52, 211, 153, .1)
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, .2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  display: inline-block
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg)
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse
+}
+
+th,
+td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap
+}
+
+th:hover {
+  color: var(--text)
+}
+
+th .sort-arrow {
+  font-size: 10px;
+  margin-left: 2px
+}
+
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch
+}
+
+input[type="date"],
+input[type="text"],
+select {
+  color-scheme: dark
+}
+
+.btn-disabled {
+  opacity: .45;
+  cursor: not-allowed
+}
+
+.filter-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  outline: none
+}
+
+.filter-input:focus {
+  border-color: var(--accent)
+}
+
+.filter-input::placeholder {
+  color: var(--muted)
+}
+
+.page-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer
+}
+
+.page-btn:hover {
+  border-color: var(--accent)
+}
+
+.page-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent)
+}
+
+.page-btn:disabled {
+  opacity: .3;
+  cursor: not-allowed
+}
+
+/* ---- Scan Results summary modal ---- */
+#scanModal table {
+  width: 100%;
+  border-collapse: collapse
+}
+
+#scanModal th,
+#scanModal td {
+  padding: .6rem .75rem;
+  text-align: left;
+  font-size: .85rem;
+  border-bottom: 1px solid var(--border)
+}
+
+#scanModal th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  cursor: default;
+  user-select: none
+}
+
+#scanModal tbody tr:hover {
+  background: rgba(91, 140, 255, .06)
+}
+
+#scanModal .scroll-area {
+  max-height: 46vh;
+  overflow: auto
+}
+
+/* ---- Scan progress dashboard ---- */
+.ps-overview {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border)
+}
+
+.ps-count {
+  font-size: 13px;
+  color: var(--muted)
+}
+
+.ps-bar-track {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 999px;
+  overflow: hidden
+}
+
+.ps-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #7aa2ff);
+  border-radius: 999px;
+  transition: width .4s ease;
+  width: 0
+}
+
+.ps-list-wrap {
+  flex: 1;
+  overflow: hidden
+}
+
+.ps-list {
+  padding: 8px;
+  max-height: 50vh;
+  overflow-y: auto
+}
+
+.ps-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 4px
+}
+
+.ps-row:hover {
+  background: rgba(91, 140, 255, .05)
+}
+
+.ps-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0
+}
+
+.ps-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px
+}
+
+.ps-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text)
+}
+
+.ps-platform {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em
+}
+
+.ps-error {
+  font-size: 11px;
+  color: var(--red);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis
+}
+
+.ps-badge {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px
+}
+
+.ps-scanning {
+  color: var(--amber);
+  background: rgba(251, 191, 36, .12);
+  border: 1px solid rgba(251, 191, 36, .3)
+}
+
+.ps-completed {
+  color: var(--green);
+  background: rgba(52, 211, 153, .12);
+  border: 1px solid rgba(52, 211, 153, .3)
+}
+
+.ps-pending {
+  color: var(--muted);
+  background: rgba(138, 150, 176, .1);
+  border: 1px solid var(--border)
+}
+
+.ps-failed {
+  color: var(--red);
+  background: rgba(248, 113, 113, .12);
+  border: 1px solid rgba(248, 113, 113, .3)
+}
+
+.ps-cancelled {
+  color: var(--muted);
+  background: rgba(138, 150, 176, .08);
+  border: 1px solid var(--border)
+}
+
+.ps-scanning .spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px
+}

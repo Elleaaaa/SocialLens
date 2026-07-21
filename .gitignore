@@ -1,0 +1,13 @@
+*.json
+!profiles.json
+*.db
+ig_state.json
+fb_state.json
+threads_state.json
+tiktok_state.json
+monitor.db
+monitor.db-wal
+monitor.db-shm
+__pycache__/
+*.pyc
+.env

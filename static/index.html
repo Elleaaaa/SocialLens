@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Social Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body class="min-h-screen">
+
+  <header class="border-b border-[var(--border)] sticky top-0 z-20 backdrop-blur" style="background:rgba(18,24,41,.85)">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+      <div class="flex items-center gap-2 font-bold text-lg">
+        <span class="inline-grid place-items-center w-8 h-8 rounded-lg"
+          style="background:conic-gradient(from 140deg,var(--accent),#22d3ee,#a78bfa)">&#128226;</span>
+        SocialLens
+      </div>
+      <span id="statusBadge" class="badge live">&#9679; Idle</span>
+      <span id="lastRun" class="text-xs text-[var(--muted)] hidden sm:inline"></span>
+      <div class="flex-1"></div>
+      <button id="addBtn"
+        class="text-sm px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]">+ Add
+        Profile</button>
+      <button id="refreshBtn"
+        class="text-sm px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]">&#8635;
+        Refresh</button>
+      <button id="runBtn" class="text-sm px-4 py-2 rounded-lg text-white font-semibold"
+        style="background:linear-gradient(135deg,var(--accent),#7aa2ff)">&#9654; Run Scan</button>
+      <form method="POST" action="/logout" style="display:inline-block">
+        <button type="submit" style="padding:8px 16px;border-radius:8px;border:1px solid var(--border);
+           background:var(--card);color:var(--text);cursor:pointer;
+           font-size:0.875rem;transition:background 0.2s;" onmouseover="this.style.background='#2a2a2a'"
+          onmouseout="this.style.background='var(--card)'">
+          Logout
+        </button>
+      </form>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+
+    <section class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+      <article class="card rounded-xl p-4">
+        <p class="text-xs uppercase tracking-wide text-[var(--muted)]">Accounts</p>
+        <p id="kAccounts" class="text-2xl sm:text-3xl font-extrabold mt-1">0</p>
+        <p class="text-xs text-[var(--muted)] mt-1"><span id="kPlatforms">0</span> platforms</p>
+      </article>
+      <article class="card rounded-xl p-4">
+        <p class="text-xs uppercase tracking-wide text-[var(--muted)]">Total Posts</p>
+        <p id="kTotal" class="text-2xl sm:text-3xl font-extrabold mt-1">0</p>
+        <p id="kTotalRange" class="text-xs text-[var(--muted)] mt-1">all time</p>
+      </article>
+      <article class="card rounded-xl p-4">
+        <p class="text-xs uppercase tracking-wide text-[var(--muted)]">Total Followers</p>
+        <p id="kFollowers" class="text-2xl sm:text-3xl font-extrabold mt-1">0</p>
+        <p class="text-xs text-[var(--muted)] mt-1">across all accounts</p>
+      </article>
+    </section>
+
+    <section>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-base">Connected Profiles</h2>
+        <span id="profileCount" class="text-xs text-[var(--muted)]"></span>
+      </div>
+      <div id="profileList" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+    </section>
+
+    <section class="card rounded-xl overflow-hidden">
+      <div class="p-4 border-b border-[var(--border)]">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold text-base">Detected Posts</h2>
+          <button id="exportBtn"
+            class="text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--accent)] text-[var(--muted)]">&#11015;
+            Export CSV</button>
+        </div>
+        <div class="flex flex-wrap gap-2 items-center">
+          <select id="fPlatform" class="filter-input">
+            <option value="">All Platforms</option>
+          </select>
+          <select id="fProfile" class="filter-input">
+            <option value="">All Accounts</option>
+          </select>
+          <input id="fSearch" type="text" placeholder="Search posts..." class="filter-input flex-1 min-w-[160px]" />
+          <input id="fromDate" type="date" class="filter-input" />
+          <span class="text-[var(--muted)] text-sm">to</span>
+          <input id="toDate" type="date" class="filter-input" />
+          <button id="clearFilters"
+            class="text-xs px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--red)] text-[var(--muted)]">Clear</button>
+          <button id="loadPostsBtn" class="text-sm px-4 py-2 rounded-lg text-white font-semibold"
+            style="background:linear-gradient(135deg,var(--accent),#7aa2ff)">Load Posts</button>
+        </div>
+      </div>
+      <div class="scroll-x">
+        <table>
+          <thead>
+            <tr>
+              <th data-sort="platform" data-dir="asc">Platform <span class="sort-arrow"></span></th>
+              <th data-sort="profile_id" data-dir="asc">Account <span class="sort-arrow"></span></th>
+              <th data-sort="title" data-dir="asc">Post <span class="sort-arrow"></span></th>
+              <th data-sort="published_at" data-dir="desc">Date Posted <span class="sort-arrow">&#9660;</span></th>
+            </tr>
+          </thead>
+          <tbody id="postsBody">
+            <tr>
+              <td colspan="4" class="text-center text-[var(--muted)] py-6">Select filters and click <b>Load Posts</b> to
+                view data.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="flex items-center justify-between px-4 py-3 border-t border-[var(--border)]">
+        <span id="pageInfo" class="text-xs text-[var(--muted)]"></span>
+        <div id="pagination" class="flex gap-1"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="text-center text-xs text-[var(--muted)] py-8">
+    SocialMonitor &bull; Python + Playwright + FastAPI
+  </footer>
+
+  <!-- Add Profile Modal -->
+  <div id="modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4"
+    style="background:rgba(5,8,15,.7);backdrop-filter:blur(4px)">
+    <div class="card rounded-2xl w-full max-w-md p-5">
+      <h3 class="font-bold text-lg mb-1">Connect Profile</h3>
+      <p class="text-sm text-[var(--muted)] mb-4">Paste a profile link to start monitoring it.</p>
+      <label class="text-xs text-[var(--muted)] block mb-1">Platform</label>
+      <select id="mPlatform" class="w-full mb-3 p-2.5 rounded-lg border border-[var(--border)]"
+        style="background:var(--bg)">
+        <option>youtube</option>
+        <option>facebook</option>
+        <option>instagram</option>
+        <option>tiktok</option>
+        <option>threads</option>
+      </select>
+      <label class="text-xs text-[var(--muted)] block mb-1">Display name</label>
+      <input id="mName" placeholder="My Brand" class="w-full mb-3 p-2.5 rounded-lg border border-[var(--border)]"
+        style="background:var(--bg)" />
+      <label class="text-xs text-[var(--muted)] block mb-1">Profile URL</label>
+      <input id="mUrl" placeholder="https://www.instagram.com/username"
+        class="w-full mb-4 p-2.5 rounded-lg border border-[var(--border)]" style="background:var(--bg)" />
+      <div class="flex justify-end gap-2">
+        <button id="mCancel" class="text-sm px-4 py-2 rounded-lg border border-[var(--border)]">Cancel</button>
+        <button id="mSave" class="text-sm px-4 py-2 rounded-lg text-white font-semibold"
+          style="background:var(--accent)">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scan Results summary modal -->
+  <div id="scanModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4"
+    style="background:rgba(5,8,15,.7);backdrop-filter:blur(4px)">
+    <div class="card w-full max-w-3xl rounded-2xl overflow-hidden flex flex-col" style="max-height:88vh">
+      <header class="flex items-center justify-between gap-3 p-4 border-b border-[var(--border)]">
+        <div class="flex items-center gap-2">
+          <h2 class="text-base font-semibold">Scan Results &mdash; New Posts Detected</h2>
+          <span id="scanNewBadge" class="badge live">0 new</span>
+        </div>
+        <button id="scanClose" class="text-[var(--muted)] hover:text-[var(--text)] text-xl leading-none"
+          aria-label="Close">&times;</button>
+      </header>
+
+      <div class="px-4 pt-3 text-xs text-[var(--muted)]">
+        Scan run: <span id="scanTime">&mdash;</span>
+      </div>
+
+      <div class="p-4 scroll-area">
+        <div id="scanEmpty" class="hidden text-center text-[var(--muted)] py-10">
+          No new posts detected in this scan.
+        </div>
+        <div id="scanTableWrap" class="overflow-x-auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Post Title</th>
+                <th>Author/Source</th>
+                <th>Date Detected</th>
+                <th>URL/Link</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="scanBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <footer class="flex items-center justify-end gap-2 p-4 border-t border-[var(--border)]">
+        <button id="scanExport" class="text-sm px-4 py-2 rounded-lg text-white font-semibold btn-disabled"
+          style="background:var(--accent)" disabled>Export to CSV</button>
+        <button id="scanDone" class="text-sm px-4 py-2 rounded-lg border border-[var(--border)]">Close</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Scan progress dashboard modal -->
+  <div id="scanProgressModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4"
+    style="background:rgba(5,8,15,.8);backdrop-filter:blur(4px)">
+    <div class="card w-full max-w-2xl rounded-2xl overflow-hidden flex flex-col" style="max-height:88vh">
+      <header class="flex items-center justify-between gap-3 p-4 border-b border-[var(--border)]">
+        <div class="flex items-center gap-2">
+          <span id="scanProgressSpinner" class="spinner"></span>
+          <h2 class="text-base font-semibold" id="scanProgressTitle">Scan in progress&hellip;</h2>
+        </div>
+        <button id="scanProgressCancel"
+          class="text-sm px-3 py-1.5 rounded-lg border border-[var(--red)] text-[var(--red)] hover:bg-[rgba(248,113,113,.1)]">Cancel</button>
+      </header>
+
+      <div class="ps-overview">
+        <div class="flex items-center justify-between mb-2">
+          <span id="scanProgressCount" class="ps-count">Starting&hellip;</span>
+          <span id="scanProgressPct" class="ps-count">0%</span>
+        </div>
+        <div class="ps-bar-track">
+          <div id="scanProgressBar" class="ps-bar-fill"></div>
+        </div>
+      </div>
+
+      <div class="ps-list-wrap">
+        <div id="scanProfileList" class="ps-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="fixed bottom-4 right-4 hidden card rounded-xl px-4 py-3 text-sm z-50"></div>
+
+  <script src="/static/script.js"></script>
+</body>
+
+</html>
