@@ -25,4 +25,4 @@ ENV DATA_DIR=/data
 
 # Use uvicorn directly. Port 8080 matches fly.toml internal_port.
 EXPOSE 8080
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
