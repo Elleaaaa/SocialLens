@@ -10,7 +10,7 @@ DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
 DB_PATH = DATA_DIR / "monitor.db"
 LOCAL_TIMEZONE_OFFSET = int(os.environ.get("LOCAL_TIMEZONE_OFFSET", "8"))
 
-BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
+BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "true").lower() == "true"
 BROWSER_SLOW_MO = 0
 PAGE_TIMEOUT_MS = 30000
 NAVIGATION_WAIT_MS = 15000

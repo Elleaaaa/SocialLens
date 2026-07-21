@@ -46,7 +46,7 @@ async def interactive_login(platform):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=False,
+            headless=True,
             slow_mo=BROWSER_SLOW_MO,
             args=["--disable-blink-features=AutomationControlled"],
         )
