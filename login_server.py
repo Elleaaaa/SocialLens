@@ -1,24 +1,17 @@
 # login_server.py
-"""Remote browser login via noVNC (Linux) or direct browser (Windows).
+"""Screenshot-based remote browser login.
 
-On Linux: launches Xvfb + x11vnc + websockify so users can log in
-through their web browser via noVNC.
-
-On Windows: launches a visible browser directly (no VNC needed).
+Works on any server (no display, no VNC, no system packages needed).
+Uses headless Chromium + screenshots + input injection.
 """
 
 import asyncio
-import os
-import platform
-import subprocess
 import time
 import uuid
-from pathlib import Path
 
 from playwright.async_api import async_playwright
 
 from config import (
-    BASE_DIR,
     USER_AGENT,
     INSTAGRAM_STATE_FILE,
     FB_SESSION_FILE,
@@ -41,21 +34,16 @@ STATE_FILES = {
     "tiktok": TIKTOK_STATE_FILE,
 }
 
-NOVNC_PORT = 8080
-DISPLAY_NUM = 99
-IS_WINDOWS = platform.system() == "Windows"
+VIEWPORT_WIDTH = 1280
+VIEWPORT_HEIGHT = 800
 
 
 class LoginSession:
-    """Manages a single remote login session."""
+    """Manages a single screenshot-based login session."""
 
     def __init__(self, platform_name: str):
         self.platform = platform_name
         self.session_id = str(uuid.uuid4())[:8]
-        self.display = f":{DISPLAY_NUM}"
-        self.xvfb_proc = None
-        self.vnc_proc = None
-        self.websockify_proc = None
         self.browser = None
         self.context = None
         self.page = None
@@ -64,115 +52,61 @@ class LoginSession:
         self.completed = False
 
     async def start(self) -> dict:
-        """Launch browser (and VNC stack on Linux)."""
+        """Launch headless browser and navigate to login page."""
         self.started_at = time.time()
-
-        if IS_WINDOWS:
-            return await self._start_windows()
-        else:
-            return await self._start_linux()
-
-    async def _start_windows(self):
-        """On Windows, just launch a visible browser directly."""
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(
-            headless=False,
+            headless=True,
             args=["--disable-blink-features=AutomationControlled"],
         )
         self.context = await self.browser.new_context(
             user_agent=USER_AGENT,
             locale="en-US",
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
         )
         self.page = await self.context.new_page()
 
         login_url = LOGIN_URLS.get(self.platform, "")
         if login_url:
             await self.page.goto(login_url, wait_until="domcontentloaded")
+            await self.page.wait_for_timeout(3000)
 
         return {
             "session_id": self.session_id,
             "platform": self.platform,
-            "vnc_url": None,
             "login_url": login_url,
-            "mode": "direct",
+            "mode": "screenshot",
         }
 
-    async def _start_linux(self):
-        """On Linux, launch Xvfb + VNC + browser."""
-        # Kill any existing processes on this display
-        subprocess.run(["pkill", "-f", f"Xvfb {self.display}"], capture_output=True)
-        subprocess.run(["pkill", "-f", "x11vnc.*:99"], capture_output=True)
-        subprocess.run(
-            ["pkill", "-f", f"websockify.*{NOVNC_PORT}"], capture_output=True
-        )
+    async def screenshot(self) -> bytes:
+        """Take a screenshot of the current page."""
+        if not self.page:
+            return b""
+        return await self.page.screenshot(type="png")
 
-        # Start Xvfb (virtual framebuffer)
-        self.xvfb_proc = subprocess.Popen(
-            ["Xvfb", self.display, "-screen", "0", "1280x800x24", "-ac"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(1)
+    async def click(self, x: int, y: int):
+        """Click at coordinates on the page."""
+        if not self.page:
+            return
+        await self.page.mouse.click(x, y)
+        await self.page.wait_for_timeout(500)
 
-        env = os.environ.copy()
-        env["DISPLAY"] = self.display
+    async def type_text(self, text: str):
+        """Type text on the page (at current cursor position)."""
+        if not self.page:
+            return
+        await self.page.keyboard.type(text)
+        await self.page.wait_for_timeout(300)
 
-        # Start x11vnc (VNC server)
-        self.vnc_proc = subprocess.Popen(
-            [
-                "x11vnc",
-                "-display",
-                self.display,
-                "-nopw",
-                "-forever",
-                "-shared",
-                "-rfbport",
-                "5999",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
-        )
-        time.sleep(1)
-
-        # Start websockify (WebSocket proxy for noVNC)
-        novnc_path = self._find_novnc_path()
-        self.websockify_proc = subprocess.Popen(
-            ["websockify", "--web", novnc_path, str(NOVNC_PORT), "localhost:5999"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(1)
-
-        # Launch browser on the virtual display
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-            env=env,
-        )
-        self.context = await self.browser.new_context(
-            user_agent=USER_AGENT,
-            locale="en-US",
-            viewport={"width": 1280, "height": 800},
-        )
-        self.page = await self.context.new_page()
-
-        login_url = LOGIN_URLS.get(self.platform, "")
-        if login_url:
-            await self.page.goto(login_url, wait_until="domcontentloaded")
-
-        return {
-            "session_id": self.session_id,
-            "platform": self.platform,
-            "vnc_url": f"/vnc/vnc.html?autoconnect=true&host=localhost&port={NOVNC_PORT}",
-            "login_url": login_url,
-            "mode": "vnc",
-        }
+    async def press_key(self, key: str):
+        """Press a key (e.g., 'Enter', 'Tab')."""
+        if not self.page:
+            return
+        await self.page.keyboard.press(key)
+        await self.page.wait_for_timeout(500)
 
     async def save_and_close(self) -> dict:
-        """Save the browser session and clean up all processes."""
+        """Save the browser session and clean up."""
         state_file = STATE_FILES.get(self.platform)
         saved = False
 
@@ -198,7 +132,7 @@ class LoginSession:
         self.completed = True
 
     async def _cleanup(self):
-        """Close browser and kill all subprocesses."""
+        """Close browser and all resources."""
         try:
             if self.page:
                 await self.page.close()
@@ -220,36 +154,11 @@ class LoginSession:
         except Exception:
             pass
 
-        if not IS_WINDOWS:
-            for proc in [self.websockify_proc, self.vnc_proc, self.xvfb_proc]:
-                if proc and proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-
     def is_expired(self) -> bool:
         """Check if the session has exceeded the login timeout."""
         if self.completed:
             return True
         return time.time() - self.started_at > LOGIN_TIMEOUT_SEC
-
-    @staticmethod
-    def _find_novnc_path() -> str:
-        """Find the noVNC web directory (Linux only)."""
-        candidates = [
-            "/usr/share/novnc",
-            "/usr/share/novnc/web",
-            "/var/www/novnc",
-            "/opt/novnc",
-        ]
-        for path in candidates:
-            if os.path.isdir(path) and os.path.exists(os.path.join(path, "vnc.html")):
-                return path
-        fallback = str(BASE_DIR / "novnc_web")
-        os.makedirs(fallback, exist_ok=True)
-        return fallback
 
 
 # Singleton session manager
@@ -257,7 +166,7 @@ _current_session: LoginSession | None = None
 
 
 async def start_login_session(platform_name: str) -> dict:
-    """Start a new remote login session."""
+    """Start a new login session."""
     global _current_session
 
     if _current_session and not _current_session.completed:
@@ -304,5 +213,33 @@ def get_session_status() -> dict:
         "session_id": _current_session.session_id,
         "elapsed": int(time.time() - _current_session.started_at),
         "timeout": LOGIN_TIMEOUT_SEC,
-        "mode": "direct" if IS_WINDOWS else "vnc",
+        "mode": "screenshot",
     }
+
+
+async def get_screenshot() -> bytes:
+    """Get a screenshot of the current login session."""
+    if not _current_session or _current_session.completed:
+        return b""
+    return await _current_session.screenshot()
+
+
+async def click_page(x: int, y: int):
+    """Click at coordinates on the current login session."""
+    if not _current_session or _current_session.completed:
+        return
+    await _current_session.click(x, y)
+
+
+async def type_on_page(text: str):
+    """Type text on the current login session."""
+    if not _current_session or _current_session.completed:
+        return
+    await _current_session.type_text(text)
+
+
+async def press_page_key(key: str):
+    """Press a key on the current login session."""
+    if not _current_session or _current_session.completed:
+        return
+    await _current_session.press_key(key)

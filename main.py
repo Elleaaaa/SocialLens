@@ -48,7 +48,13 @@ async def interactive_login(playwright, platform):
 
     browser = await playwright.chromium.launch(
         headless=False,
-        args=["--disable-blink-features=AutomationControlled"],
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+        ],
     )
     try:
         context = await browser.new_context(
@@ -56,8 +62,33 @@ async def interactive_login(playwright, platform):
             locale="en-US",
             viewport={"width": 1280, "height": 800},
         )
+
+        # Stealth script to hide automation detection
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
+
         page = await context.new_page()
-        await page.goto(login_url, wait_until="domcontentloaded")
+
+        # Retry navigation (TikTok resets connections on first attempt)
+        for attempt in range(3):
+            try:
+                await page.goto(login_url, wait_until="commit", timeout=30000)
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    print(f"  - Connection retry {attempt + 1}...")
+                    await asyncio.sleep(3)
+                else:
+                    print(f"  ! Could not load {login_url}: {exc}")
+                    print("  ! Try opening the page manually in the browser window.")
+                    # Navigate to a blank page so the browser stays open
+                    await page.goto("about:blank")
+
+        await page.wait_for_timeout(2000)
         print(f"Browser opened at {login_url}")
         print("Log in manually. Press Enter here when done.")
 
@@ -184,18 +215,9 @@ async def run_scan():
 
         scan_state.set_scanning(i)
 
-        # Determine headless mode per platform:
-        # TikTok requires headless=False (it detects headless and limits
-        # the grid to 16 videos). All other platforms respect BROWSER_HEADLESS.
-        is_tiktok = profile["platform"] == "tiktok"
-        headless = False if is_tiktok else BROWSER_HEADLESS
-
-        if is_tiktok and BROWSER_HEADLESS:
-            print(f"  - TikTok: using headless=False (required for full grid)")
-
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=headless,
+                headless=BROWSER_HEADLESS,
                 args=["--disable-blink-features=AutomationControlled"],
             )
             try:
@@ -210,6 +232,9 @@ async def run_scan():
                 }
                 if state_file and os.path.exists(state_file):
                     context_kwargs["storage_state"] = state_file
+                    print(f"  - Loaded session for {profile['platform']}")
+                else:
+                    print(f"  - No session file for {profile['platform']}")
 
                 context = await browser.new_context(**context_kwargs)
                 page = await context.new_page()
