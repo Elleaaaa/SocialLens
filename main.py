@@ -3,174 +3,205 @@
 
 import argparse
 import asyncio
-import json
 import os
 from datetime import datetime, timezone
+
 from playwright.async_api import async_playwright
 
 from config import (
     BROWSER_HEADLESS,
-    BROWSER_SLOW_MO,
     PAGE_TIMEOUT_MS,
     DELAY_BETWEEN_PROFILES_SEC,
-    USER_AGENT,
     INSTAGRAM_STATE_FILE,
     FB_SESSION_FILE,
     THREADS_STATE_FILE,
+    TIKTOK_STATE_FILE,
     SCAN_TIMEOUT_SEC,
+    LOGIN_TIMEOUT_SEC,
+    USER_AGENT,
 )
-from storage import get_profiles
-from storage import get_conn, init_db, is_post_seen, save_post, save_metric, log_run
+from storage import (
+    get_conn,
+    get_profiles,
+    is_post_seen,
+    save_post,
+    save_metric,
+    log_run,
+)
 from monitors import get_monitor
 import scan_state
 
 
-async def interactive_login(platform):
-    """Open a visible browser for manual login."""
+async def interactive_login(playwright, platform):
+    """Open a visible browser for one-time manual login."""
     if platform == "instagram":
         login_url = "https://www.instagram.com/accounts/login/"
-        state_file = INSTAGRAM_STATE_FILE
-        print("=== Instagram Login ===")
     elif platform == "facebook":
-        login_url = "https://www.facebook.com/login.php"
-        state_file = FB_SESSION_FILE
-        print("=== Facebook Login ===")
+        login_url = "https://www.facebook.com/login/"
     elif platform == "threads":
         login_url = "https://www.threads.net/login"
-        state_file = THREADS_STATE_FILE
-        print("=== Threads Login ===")
-        print("(Uses your Instagram account credentials)")
+    elif platform == "tiktok":
+        login_url = "https://www.tiktok.com/login"
     else:
         print(f"Unknown platform: {platform}")
         return
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            slow_mo=BROWSER_SLOW_MO,
-            args=["--disable-blink-features=AutomationControlled"],
+    browser = await playwright.chromium.launch(
+        headless=False,
+        args=["--disable-blink-features=AutomationControlled"],
+    )
+    try:
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            locale="en-US",
+            viewport={"width": 1280, "height": 800},
         )
-        try:
-            context = await browser.new_context(
-                user_agent=USER_AGENT,
-                locale="en-US",
-                viewport={"width": 1280, "height": 800},
-            )
-            page = await context.new_page()
+        page = await context.new_page()
+        await page.goto(login_url, wait_until="domcontentloaded")
+        print(f"Browser opened at {login_url}")
+        print("Log in manually. Press Enter here when done.")
 
-            await page.goto(login_url, wait_until="domcontentloaded")
-            print(f"\nBrowser opened to {login_url}")
-            print("Log in to your account in the browser window.")
-            print("When you see your feed/home page, come back here and press Enter.")
+        import threading
 
-            # input() is blocking — run in executor to avoid stalling
-            # the event loop if other async tasks are running.
-            await asyncio.get_event_loop().run_in_executor(None, input)
+        done = threading.Event()
 
-            state = await context.storage_state()
-            with open(state_file, "w") as f:
-                json.dump(state, f, indent=2)
-            print(f"\nSession saved to: {state_file}")
-            print("You can now run: python main.py --once")
-        finally:
-            await browser.close()
+        def _wait_input():
+            input()
+            done.set()
+
+        threading.Thread(target=_wait_input, daemon=True).start()
+
+        elapsed = 0
+        while not done.is_set() and elapsed < LOGIN_TIMEOUT_SEC:
+            await asyncio.sleep(1)
+            elapsed += 1
+
+        if done.is_set():
+            if platform == "instagram":
+                await context.storage_state(path=INSTAGRAM_STATE_FILE)
+                print(f"Session saved to: {INSTAGRAM_STATE_FILE}")
+            elif platform == "facebook":
+                await context.storage_state(path=FB_SESSION_FILE)
+                print(f"Session saved to: {FB_SESSION_FILE}")
+            elif platform == "threads":
+                await context.storage_state(path=THREADS_STATE_FILE)
+                print(f"Session saved to: {THREADS_STATE_FILE}")
+            elif platform == "tiktok":
+                await context.storage_state(path=TIKTOK_STATE_FILE)
+                print(f"Session saved to: {TIKTOK_STATE_FILE}")
+            print("Login setup complete. You can now run: python main.py --once")
+        else:
+            print("Login timed out. Session was not saved.")
+    finally:
+        await browser.close()
 
 
-# main.py
 async def scan_profile(page, profile, conn):
-    """Scan a single profile. Returns (new_count, followers)."""
+    """Scan a single profile for new posts and follower count."""
     monitor = get_monitor(profile["platform"], page, profile)
     print(f"\n→ Scanning {profile['name']} ({profile['platform']}) — {profile['url']}")
 
+    # Fetch follower count
     followers = await monitor.fetch_stats()
-    print(f"  ◷ followers: {followers:,}")
+    if followers:
+        save_metric(conn, profile["id"], profile["platform"], followers)
+        print(f"  ◷ {monitor.metric_label}: {followers:,}")
 
+    # Get already-seen post IDs for incremental scan
     seen_shortcodes = set()
     try:
         rows = conn.execute(
             "SELECT post_id FROM posts WHERE profile_id=?",
             (profile["id"],),
         ).fetchall()
-        seen_shortcodes = {row["post_id"] for row in rows}
-        if seen_shortcodes:
-            print(
-                f"  - {len(seen_shortcodes)} posts already in database "
-                f"(will stop early when hitting them)"
-            )
+        seen_shortcodes = {row["post_id"] for row in rows if row["post_id"]}
     except Exception as exc:
-        print(f"  ! Warning: could not load seen posts: {exc}")
+        print(f"  ! Could not load seen posts: {exc}")
 
+    if seen_shortcodes:
+        print(
+            f"  - {len(seen_shortcodes)} posts already in database (will stop early when hitting them)"
+        )
+
+    # Fetch new posts
     posts = await monitor.fetch_posts(seen_shortcodes=seen_shortcodes)
 
+    # Save new posts
     new_count = 0
     for post in posts:
         post_id = post.get("post_id", post["url"])
-        try:
-            if not is_post_seen(conn, profile["id"], post_id):
-                save_post(
-                    conn,
-                    profile["id"],
-                    profile["platform"],
-                    post_id,
-                    post.get("title", ""),
-                    post["url"],
-                    post.get("published_at"),
-                )
-                new_count += 1
-        except Exception as exc:
-            print(f"  ! Error saving post {post_id}: {exc}")
-
-    try:
-        save_metric(conn, profile["id"], profile["platform"], followers)
-    except Exception as exc:
-        print(f"  ! Error saving metric: {exc}")
+        if not is_post_seen(conn, profile["id"], post_id):
+            save_post(
+                conn,
+                profile["id"],
+                profile["platform"],
+                post_id,
+                post.get("title", ""),
+                post["url"],
+                post.get("published_at"),
+            )
+            new_count += 1
 
     print(f"  • {len(posts)} posts found, {new_count} new")
+
     if new_count > 0:
         print(
             f"[ALERT] {profile['name']} ({profile['platform']}) — {new_count} new post(s)"
         )
+
+    # Log the run
+    log_run(conn, profile["id"], profile["platform"], "success", new_count)
     return new_count, followers
 
 
-async def run_scan():
-    profiles = get_profiles()
-    conn = get_conn()
-    print(f"=== Scan started at {datetime.now(timezone.utc).isoformat()} ===")
+def _get_state_file(platform):
+    """Return the session state file path for a platform, or None."""
+    if platform == "instagram":
+        return INSTAGRAM_STATE_FILE
+    elif platform == "facebook":
+        return FB_SESSION_FILE
+    elif platform == "threads":
+        return THREADS_STATE_FILE
+    elif platform == "tiktok":
+        return TIKTOK_STATE_FILE
+    return None
 
-    # Initialize the structured progress snapshot (all profiles pending).
+
+async def run_scan():
+    """Run a full scan across all profiles."""
+    conn = get_conn()
+    profiles = get_profiles()
+
+    print(f"=== Scan started at {datetime.now(timezone.utc).isoformat()} ===")
     scan_state.init_progress(profiles)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=BROWSER_HEADLESS,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        try:
-            for i, profile in enumerate(profiles):
-                # Graceful cancel: stop before starting the next profile.
-                if scan_state.is_cancelled():
-                    print("  ! Scan cancelled by user — stopping.")
-                    scan_state.set_cancelled_remaining(i)
-                    break
+    for i, profile in enumerate(profiles):
+        scan_state.set_running(i, profile["name"])
 
-                scan_state.set_scanning(i)
+        # Determine headless mode per platform:
+        # TikTok requires headless=False (it detects headless and limits
+        # the grid to 16 videos). All other platforms respect BROWSER_HEADLESS.
+        is_tiktok = profile["platform"] == "tiktok"
+        headless = False if is_tiktok else BROWSER_HEADLESS
 
+        if is_tiktok and BROWSER_HEADLESS:
+            print(f"  - TikTok: using headless=False (required for full grid)")
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=headless,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            try:
                 # Select session file based on platform
-                state_file = None
-                if profile["platform"] == "instagram":
-                    state_file = INSTAGRAM_STATE_FILE
-                elif profile["platform"] == "facebook":
-                    state_file = FB_SESSION_FILE
-                elif profile["platform"] == "threads":
-                    state_file = THREADS_STATE_FILE
+                state_file = _get_state_file(profile["platform"])
 
-                # Create a fresh context per profile with the correct
-                # session loaded (cookies + localStorage via storage_state).
-                context_kwargs = dict(
-                    user_agent=USER_AGENT,
-                    viewport={"width": 1280, "height": 800},
-                )
+                # Create context with session state if available
+                context_kwargs = {
+                    "user_agent": USER_AGENT,
+                    "locale": "en-US",
+                    "viewport": {"width": 1280, "height": 800},
+                }
                 if state_file and os.path.exists(state_file):
                     context_kwargs["storage_state"] = state_file
 
@@ -179,12 +210,9 @@ async def run_scan():
                 page.set_default_timeout(PAGE_TIMEOUT_MS)
 
                 try:
-                    new_count, followers = await asyncio.wait_for(
+                    await asyncio.wait_for(
                         scan_profile(page, profile, conn),
                         timeout=SCAN_TIMEOUT_SEC,
-                    )
-                    scan_state.set_completed(
-                        i, new_posts=new_count, followers=followers
                     )
                 except asyncio.TimeoutError:
                     print(f"  ! Timeout scanning {profile['name']}")
@@ -195,41 +223,47 @@ async def run_scan():
                 finally:
                     await page.close()
                     await context.close()
+            finally:
+                await browser.close()
 
-                await asyncio.sleep(DELAY_BETWEEN_PROFILES_SEC)
-        finally:
-            await browser.close()
+        if i < len(profiles) - 1:
+            await asyncio.sleep(DELAY_BETWEEN_PROFILES_SEC)
 
     conn.close()
+    scan_state.finish_progress()
     print("=== Scan finished ===\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Social media monitor")
-    parser.add_argument("--once", action="store_true", help="Run a single scan")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single scan",
+    )
     parser.add_argument(
         "--login",
         action="store_true",
-        help="Interactive login for Instagram or Facebook",
+        help="Interactive login for a platform",
     )
     parser.add_argument(
         "--platform",
         type=str,
         default="instagram",
-        choices=["instagram", "facebook", "threads"],
-        help="Platform to log in to (for --login)",
+        choices=["instagram", "facebook", "threads", "tiktok"],
+        help="Platform for login (default: instagram)",
     )
     args = parser.parse_args()
 
-    # Initialize database schema once at startup
-    init_db()
-
     if args.login:
-        asyncio.run(interactive_login(args.platform))
-    elif args.once:
-        asyncio.run(run_scan())
+        asyncio.run(_do_login(args.platform))
     else:
-        parser.print_help()
+        asyncio.run(run_scan())
+
+
+async def _do_login(platform):
+    async with async_playwright() as p:
+        await interactive_login(p, platform)
 
 
 if __name__ == "__main__":

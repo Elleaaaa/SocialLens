@@ -20,4 +20,4 @@ RUN mkdir -p /data
 ENV DATA_DIR=/data
 
 EXPOSE 8080
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["xvfb-run", "--auto-servernum", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
