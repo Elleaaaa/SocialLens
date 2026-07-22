@@ -72,12 +72,13 @@ function statsQueryParams() {
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const r = await fetch(path, { ...opts, headers });
+  const text = await r.text();
   if (!r.ok) {
     let detail = '';
-    try { detail = (await r.json()).detail || await r.text(); } catch (e) { detail = await r.text(); }
+    try { detail = JSON.parse(text).detail || text; } catch (e) { detail = text; }
     throw new Error('HTTP ' + r.status + (detail ? ': ' + detail : ''));
   }
-  return r.json();
+  try { return JSON.parse(text); } catch { return text; }
 }
 
 async function loadStats() {
@@ -566,3 +567,58 @@ $('runBtn').onclick = async () => {
 
 loadAll();
 setInterval(loadAll, 30000);
+
+async function startLogin(platform) {
+  try {
+    const res = await api('/api/login/start/' + platform, { method: 'GET' });
+    document.getElementById('loginStatus').classList.remove('hidden');
+    document.getElementById('loginStatus').textContent = `Login window opened for ${platform}. Complete login in the new tab, then click "Done".`;
+    document.getElementById('loginActions').classList.remove('hidden');
+
+    // Open noVNC viewer in a new tab
+    window.open(res.vnc_url, '_blank');
+
+    // Start polling for session status
+    pollLoginStatus();
+  } catch (e) {
+    toast('Login error: ' + e.message);
+  }
+}
+
+async function doneLogin() {
+  try {
+    const res = await api('/api/login/done', { method: 'POST' });
+    document.getElementById('loginStatus').textContent = `Session saved for ${res.platform}.`;
+    document.getElementById('loginActions').classList.add('hidden');
+    toast('Login session saved successfully');
+  } catch (e) {
+    toast('Error saving session: ' + e.message);
+  }
+}
+
+async function cancelLogin() {
+  try {
+    await api('/api/login/cancel', { method: 'POST' });
+    document.getElementById('loginStatus').textContent = 'Login cancelled.';
+    document.getElementById('loginActions').classList.add('hidden');
+  } catch (e) {
+    toast('Error: ' + e.message);
+  }
+}
+
+let loginPollTimer = null;
+function pollLoginStatus() {
+  if (loginPollTimer) clearInterval(loginPollTimer);
+  loginPollTimer = setInterval(async () => {
+    try {
+      const status = await api('/api/login/status');
+      if (!status.active) {
+        clearInterval(loginPollTimer);
+        document.getElementById('loginStatus').textContent = 'Login session ended.';
+        document.getElementById('loginActions').classList.add('hidden');
+      }
+    } catch (e) {
+      clearInterval(loginPollTimer);
+    }
+  }, 5000);
+}

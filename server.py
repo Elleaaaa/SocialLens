@@ -6,9 +6,13 @@ import csv
 import io
 import os
 import threading
+import httpx
+from fastapi.responses import Response
+from config import NOVNC_PORT
 from datetime import datetime as dt
 from pathlib import Path
 from contextlib import asynccontextmanager
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
@@ -36,6 +40,13 @@ from storage import (
     get_distinct_platforms,
     add_profile,
     delete_profile,
+)
+
+from login_server import (
+    start_login_session,
+    complete_login_session,
+    cancel_login_session,
+    get_session_status,
 )
 
 from config import (
@@ -192,6 +203,50 @@ async def logout(request: Request):
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+# ------------------------------------------------------------------
+# Remote Browser Login (noVNC)
+# ------------------------------------------------------------------
+
+
+@app.get("/api/login/start/{platform}")
+async def api_login_start(platform: str):
+    """Start a remote browser login session."""
+    allowed = {"instagram", "facebook", "threads", "tiktok"}
+    if platform not in allowed:
+        raise HTTPException(
+            status_code=422, detail=f"Platform must be one of {allowed}"
+        )
+    try:
+        result = await start_login_session(platform)
+        return {"status": "started", **result}
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.post("/api/login/done")
+async def api_login_done():
+    """Save the session from the remote browser and clean up."""
+    result = await complete_login_session()
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return {"status": "saved", **result}
+
+
+@app.post("/api/login/cancel")
+async def api_login_cancel():
+    """Cancel the remote login session without saving."""
+    result = await cancel_login_session()
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/login/status")
+def api_login_status():
+    """Check if a remote login session is active."""
+    return get_session_status()
 
 
 # ------------------------------------------------------------------
@@ -473,6 +528,33 @@ def api_trigger_scan():
 
     threading.Thread(target=_do_scan, daemon=True).start()
     return {"status": "started"}
+
+
+# Proxy /vnc/ requests to the websockify/noVNC server
+@app.api_route("/vnc/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def vnc_proxy(path: str, request: Request):
+    """Proxy noVNC web client requests to the websockify server."""
+    target_url = f"http://localhost:{NOVNC_PORT}/{path}"
+    if request.url.query:
+        target_url += f"?{request.url.query}"
+
+    async with httpx.AsyncClient() as client:
+        headers = dict(request.headers)
+        headers.pop("host", None)
+        resp = await client.request(
+            request.method,
+            target_url,
+            headers=headers,
+            content=await request.body() if request.method in ("POST", "PUT") else None,
+        )
+
+        response = Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+            media_type=resp.headers.get("content-type"),
+        )
+        return response
 
 
 if __name__ == "__main__":

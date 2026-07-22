@@ -37,6 +37,30 @@
           Logout
         </button>
       </form>
+      <div class="border-t border-[var(--border)] pt-4 mt-4">
+        <h3 class="text-sm font-semibold mb-3">Account Login</h3>
+        <p class="text-xs text-[var(--muted)] mb-3">
+          Log in to your social media accounts. Click a button below, log in
+          through the browser window that opens, then click "Done".
+        </p>
+        <div class="flex flex-wrap gap-2 mb-3">
+          <button onclick="startLogin('instagram')"
+            class="login-btn px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-sm">Login Instagram</button>
+          <button onclick="startLogin('facebook')"
+            class="login-btn px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-sm">Login Facebook</button>
+          <button onclick="startLogin('threads')"
+            class="login-btn px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-sm">Login Threads</button>
+          <button onclick="startLogin('tiktok')"
+            class="login-btn px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-sm">Login TikTok</button>
+        </div>
+        <div id="loginStatus" class="text-xs text-[var(--muted)] hidden"></div>
+        <div id="loginActions" class="flex gap-2 mt-2 hidden">
+          <button onclick="doneLogin()" class="px-3 py-2 rounded-lg bg-[var(--green)] text-white text-sm">Done — Save
+            Session</button>
+          <button onclick="cancelLogin()"
+            class="px-3 py-2 rounded-lg bg-[var(--red)] text-white text-sm">Cancel</button>
+        </div>
+      </div>
     </div>
   </header>
 
