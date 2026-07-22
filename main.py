@@ -176,7 +176,13 @@ async def run_scan():
     scan_state.init_progress(profiles)
 
     for i, profile in enumerate(profiles):
-        scan_state.set_running(i, profile["name"])
+        # Check for cancel before starting each profile
+        if scan_state.is_cancelled():
+            scan_state.set_cancelled_remaining(i)
+            print("  - Scan cancelled by user")
+            break
+
+        scan_state.set_scanning(i)
 
         # Determine headless mode per platform:
         # TikTok requires headless=False (it detects headless and limits
@@ -210,10 +216,11 @@ async def run_scan():
                 page.set_default_timeout(PAGE_TIMEOUT_MS)
 
                 try:
-                    await asyncio.wait_for(
+                    new_count, followers = await asyncio.wait_for(
                         scan_profile(page, profile, conn),
                         timeout=SCAN_TIMEOUT_SEC,
                     )
+                    scan_state.set_completed(i, new_count, followers)
                 except asyncio.TimeoutError:
                     print(f"  ! Timeout scanning {profile['name']}")
                     scan_state.set_failed(i, Exception("scan timeout"))
