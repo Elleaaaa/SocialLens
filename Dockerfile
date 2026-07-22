@@ -26,6 +26,8 @@ RUN apt-get update \
 # Copy application code
 COPY . .
 
+RUN mkdir -p /data
+
 # Wrap uvicorn in xvfb-run so headed Chromium launches work on a server.
 EXPOSE 8080
 CMD ["sh", "-c", "for i in $(seq 1 10); do ls /data/monitor.db && break || sleep 2; done && xvfb-run --auto-servernum uvicorn server:app --host 0.0.0.0 --port 8080"]
