@@ -12,10 +12,6 @@ RUN playwright install --with-deps chromium
 
 COPY . .
 
-# Seed the database into /data (matches DATA_DIR=/data)
-RUN mkdir -p /data
-COPY monitor.db /data/monitor.db
-
 RUN mkdir -p /data
 ENV DATA_DIR=/data
 
