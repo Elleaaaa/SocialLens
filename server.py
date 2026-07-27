@@ -331,7 +331,7 @@ def api_posts(
     if search and len(search) > 200:
         raise HTTPException(status_code=422, detail="Search query too long")
 
-    per_page = min(per_page, 100)
+    per_page = min(per_page, 100000)
     page = max(page, 1)
     offset = (page - 1) * per_page
 
