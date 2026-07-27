@@ -41,6 +41,8 @@ This system can run on:
 
 ```bash
 python -m venv .venv
+or
+py -m venv .venv
 ```
 
 3. Activate the environment:
@@ -64,6 +66,7 @@ pip install -r requirements.txt
 
 ```bash
 python -m playwright install chromium
+py -m playwright install chromium
 ```
 
 ## Environment
@@ -93,7 +96,7 @@ The system uses saved browser session state for social platforms. The default fi
 To perform a one-time login for a platform locally and save the session state:
 
 ```bash
-python main.py --login --platform instagram
+py main.py --login --platform instagram
 ```
 
 Replace `instagram` with `facebook`, `threads`, or `tiktok`.
@@ -103,7 +106,7 @@ Follow the browser window instructions and save the session.
 ### 3. Run a one-time scan
 
 ```bash
-python main.py --once
+py main.py --once
 ```
 
 This will scan all profiles saved in the database.
@@ -111,7 +114,7 @@ This will scan all profiles saved in the database.
 ### 4. Run the dashboard
 
 ```bash
-python server.py
+py server.py
 ```
 
 Then open the browser at:

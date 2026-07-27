@@ -325,12 +325,16 @@ def api_posts(
     sort_dir: str = "desc",
     page: int = 1,
     per_page: int = 20,
+    since: str = None,
 ):
     from_date = validate_date(from_date)
     to_date = validate_date(to_date)
     if search and len(search) > 200:
         raise HTTPException(status_code=422, detail="Search query too long")
 
+    # Allow large pages for the scan-results fetch (which needs all
+    # newly-detected posts in one request). Normal browsing uses the
+    # default per_page=20.
     per_page = min(per_page, 100000)
     page = max(page, 1)
     offset = (page - 1) * per_page
@@ -347,6 +351,7 @@ def api_posts(
         sort_dir=sort_dir,
         limit=per_page,
         offset=offset,
+        detected_since=since,
     )
     total = get_posts_count(
         conn,
@@ -355,6 +360,7 @@ def api_posts(
         platform=platform,
         profile_id=profile_id,
         search=search,
+        detected_since=since,
     )
     conn.close()
 
@@ -418,7 +424,7 @@ def api_posts_export(
                     post.get("detected_at", ""),
                 ]
             )
-        yield output.getvalue()
+            yield output.getvalue()
 
     return StreamingResponse(
         generate(),

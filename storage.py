@@ -185,8 +185,15 @@ def get_posts_filtered(
     sort_dir="desc",
     limit=20,
     offset=0,
+    detected_since=None,
 ):
-    """Get posts with full filtering, sorting, and pagination."""
+    """Get posts with full filtering, sorting, and pagination.
+
+    detected_since: ISO 8601 timestamp; only posts whose detected_at
+    is >= this value are returned. Used by the scan-results modal to
+    fetch exactly the posts inserted during the current scan, instead
+    of diffing a capped baseline snapshot.
+    """
     conds, params = [], []
 
     offset_expr = f"+{LOCAL_TIMEZONE_OFFSET} hours"
@@ -209,6 +216,9 @@ def get_posts_filtered(
     if search:
         conds.append("(p.title LIKE ? OR p.url LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
+    if detected_since:
+        conds.append("p.detected_at >= ?")
+        params.append(detected_since)
 
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
 
@@ -223,7 +233,7 @@ def get_posts_filtered(
     else:
         sort_expr = f"p.{sort_col}"
 
-    limit = min(int(limit or 20), 500)
+    limit = min(int(limit or 20), 100000)
     offset = max(int(offset or 0), 0)
 
     query = f"""
@@ -245,6 +255,7 @@ def get_posts_count(
     platform=None,
     profile_id=None,
     search=None,
+    detected_since=None,
 ):
     """Get total count of posts matching the filter (for pagination)."""
     conds, params = [], []
@@ -269,6 +280,9 @@ def get_posts_count(
     if search:
         conds.append("(p.title LIKE ? OR p.url LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
+    if detected_since:
+        conds.append("p.detected_at >= ?")
+        params.append(detected_since)
 
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
     query = f"""

@@ -1,3 +1,4 @@
+// script.js
 const PLATFORM_COLORS = { youtube: '#FF0000', facebook: '#1877F2', instagram: '#E1306C', tiktok: '#00f2ea', x: '#1DA1F2' };
 const $ = id => document.getElementById(id);
 const toastEl = $('toast');
@@ -9,9 +10,10 @@ let sortBy = 'published_at';
 let sortDir = 'desc';
 let allProfiles = [];
 let searchTimer = null;
+let profilePage = 0;
+const PROFILE_PAGE_SIZE = 50;
+let profileFilter = { platform: '', profile: '', search: '' };
 let postsLoaded = false;
-let scanStartedAt = null;
-let progressTimer = null;
 
 function toast(msg) { toastEl.textContent = msg; toastEl.classList.remove('hidden'); setTimeout(() => toastEl.classList.add('hidden'), 3000); }
 
@@ -55,7 +57,7 @@ function postQueryParams() {
   if (profile) p.set('profile_id', profile);
   if (search) p.set('search', search);
   p.set('sort_by', sortBy);
-  p.set('sort_dir', sortDir);
+ ![](data.sort_dir = sortDir);
   p.set('page', currentPage);
   p.set('per_page', 20);
   return p.toString();
@@ -72,13 +74,12 @@ function statsQueryParams() {
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const r = await fetch(path, { ...opts, headers });
-  const text = await r.text();
   if (!r.ok) {
     let detail = '';
-    try { detail = JSON.parse(text).detail || text; } catch (e) { detail = text; }
+    try { detail = (await r.json()).detail || await r.text(); } catch (e) { detail = await r.text(); }
     throw new Error('HTTP ' + r.status + (detail ? ': ' + detail : ''));
   }
-  try { return JSON.parse(text); } catch { return text; }
+  return r.json();
 }
 
 async function loadStats() {
@@ -102,11 +103,53 @@ async function loadProfiles() {
   const platforms = new Set(profiles.map(p => p.platform));
   $('kAccounts').textContent = profiles.length;
   $('kPlatforms').textContent = platforms.size;
-  $('profileCount').textContent = profiles.length + ' profiles';
+  populateProfilePlatformFilter(profiles);
+  populateProfileAccountFilter(profiles);
+  profilePage = 0;
+  renderProfiles();
+  updateProfileFilter();
+}
+
+function populateProfilePlatformFilter(profiles) {
+  const sel = $('pPlatform');
+  const current = sel.value;
+  const plats = [...new Set(profiles.map(p => p.platform))];
+  sel.innerHTML = '<option value="">All Platforms</option>' +
+    plats.map(p => `<option value="${p}">${p.charAt(0).toUpperCase() + p.slice(1)}</option>`).join('');
+  sel.value = current;
+}
+
+function populateProfileAccountFilter(profiles) {
+  const sel = $('pProfile');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All Accounts</option>' +
+    profiles.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  sel.value = current;
+}
+
+function filteredProfiles() {
+  const { platform, profile, search } = profileFilter;
+  const s = search.trim().toLowerCase();
+  return allProfiles.filter(p => {
+    if (platform && p.platform !== platform) return false;
+    if (profile && String(p.id) !== String(profile)) return false;
+    if (s && !((p.name + ' ' + p.url + ' ' + p.platform).toLowerCase().includes(s))) return false;
+    return true;
+  });
+}
+
+function renderProfiles() {
   const wrap = $('profileList'); wrap.innerHTML = '';
-  if (!profiles.length) { wrap.innerHTML = '<p class="text-[var(--muted)] text-sm col-span-full">No profiles yet. Click + Add Profile.</p>'; return; }
+  const more = $('profileMore'); more.innerHTML = '';
+  const list = filteredProfiles();
+  $('profileCount').textContent = list.length + ' of ' + allProfiles.length + ' profiles';
+  if (!list.length) {
+    wrap.innerHTML = '<p class="text-[var(--muted)] text-sm col-span-full">No profiles match your filters.</p>';
+    return;
+  }
   const now = Date.now();
-  profiles.forEach(p => {
+  const shown = list.slice(0, (profilePage + 1) * PROFILE_PAGE_SIZE);
+  shown.forEach(p => {
     const c = PLATFORM_COLORS[p.platform] || '#5b8cff';
     const card = document.createElement('article');
     card.className = 'card rounded-xl p-4 flex gap-3 items-start';
@@ -134,7 +177,14 @@ async function loadProfiles() {
     try { await api('/api/profiles/' + b.dataset.id, { method: 'DELETE' }); toast('Profile removed'); loadAll(); }
     catch (e) { toast('Error: ' + e.message); }
   });
-  updateProfileFilter();
+  const remaining = list.length - shown.length;
+  if (remaining > 0) {
+    const btn = document.createElement('button');
+    btn.className = 'text-sm px-4 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]';
+    btn.textContent = `Show ${Math.min(PROFILE_PAGE_SIZE, remaining)} more (${remaining} left)`;
+    btn.onclick = () => { profilePage++; renderProfiles(); };
+    more.appendChild(btn);
+  }
 }
 
 function updateProfileFilter() {
@@ -258,6 +308,20 @@ $('fSearch').addEventListener('input', () => {
 });
 $('fromDate').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
 $('toDate').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
+
+// Profile filter controls
+$('pPlatform').addEventListener('change', () => { profileFilter.platform = $('pPlatform').value; profilePage = 0; renderProfiles(); });
+$('pProfile').addEventListener('change', () => { profileFilter.profile = $('pProfile').value; profilePage = 0; renderProfiles(); });
+$('pSearch').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { profileFilter.search = $('pSearch').value; profilePage = 0; renderProfiles(); }, 200);
+});
+$('pClear').onclick = () => {
+  profileFilter = { platform: '', profile: '', search: '' };
+  $('pPlatform').value = ''; $('pProfile').value = ''; $('pSearch').value = '';
+  profilePage = 0; renderProfiles();
+};
+
 $('clearFilters').onclick = () => {
   $('fPlatform').value = ''; $('fProfile').value = '';
   $('fSearch').value = ''; $('fromDate').value = ''; $('toDate').value = '';
@@ -324,7 +388,6 @@ $('refreshBtn').onclick = () => { loadAll(); toast('Data refreshed'); };
  * Scan Results summary modal
  * ============================================================ */
 const scanModal = $('scanModal');
-let scanBaseline = null;
 let scanResults = [];
 
 function escapeHtml(s) {
@@ -339,26 +402,27 @@ function fmtDateTime(iso) {
   return d.toLocaleString();
 }
 
-function postKey(p) {
-  return p.post_id || p.url || p.title || '';
-}
-
 function toPostArray(data) {
   if (Array.isArray(data)) return data;
   return (data && data.posts) ? data.posts : [];
 }
 
-async function captureBaseline() {
-  const data = await api('/api/posts?per_page=10000');
-  scanBaseline = new Set(toPostArray(data).map(postKey));
-}
-
-async function showScanResults() {
+async function showScanResults(scanStartedAt) {
   try {
-    const data = await api('/api/posts?per_page=10000');
-    const fresh = toPostArray(data);
-    const base = scanBaseline || new Set();
-    const newPosts = fresh.filter(p => !base.has(postKey(p)));
+    // Fetch only posts detected at/after the scan started. This is O(new posts)
+    // and uncapped, replacing the old baseline-diff that was capped at the
+    // /api/posts page size (the cause of the "99 new" ceiling).
+    // A 5s buffer tolerates browser/server clock skew; scans run for minutes
+    // so this never reaches a previous scan's posts.
+    const sinceIso = new Date(scanStartedAt - 5000).toISOString();
+    const q = new URLSearchParams({
+      per_page: '100000',
+      sort_by: 'detected_at',
+      sort_dir: 'desc',
+      since: sinceIso,
+    });
+    const data = await api('/api/posts?' + q.toString());
+    const newPosts = toPostArray(data);
     openScanResults(newPosts, scanStartedAt);
   } catch (e) {
     console.error('scan results error', e);
@@ -387,7 +451,7 @@ function openScanResults(newPosts, runTime) {
       <tr>
         <td>${escapeHtml(p.title || '(untitled)')}</td>
         <td>${escapeHtml(p.profile_name || p.platform || '—')}</td>
-        <td>${fmtDateTime(p.published_at)}</td>
+        <td>${fmtDateTime(p.detected_at)}</td>
         <td><a href="${escapeHtml(p.url || '#')}" target="_blank"
                class="text-[var(--accent)] hover:underline">Open</a></td>
         <td><span class="badge live">New</span></td>
@@ -438,132 +502,167 @@ document.addEventListener('keydown', e => {
 });
 
 /* ============================================================
- * Scan progress dashboard (polls /api/scan/progress)
+ * Scan Progress dashboard modal (live logs + queue)
+ * Polls /api/scan/progress for the live print() buffer and
+ * renders it into #scanProfileList. Uses /api/scan/status only
+ * to detect scan completion.
  * ============================================================ */
 const scanProgressModal = $('scanProgressModal');
+let scanProgressPoll = null;
+let lastLogLength = 0;
 
 function openScanProgress() {
-  renderScanProgress({ running: true, profiles: [] });
+  $('scanProgressTitle').textContent = 'Scan in progress…';
+  const spin = $('scanProgressSpinner'); if (spin) spin.classList.remove('hidden');
+  $('scanProgressCount').textContent = 'Starting…';
+  $('scanProgressPct').textContent = '0%';
+  $('scanProgressBar').style.width = '0%';
+  $('scanProfileList').innerHTML = '<div class="ps-empty text-[var(--muted)] text-sm p-4">Initializing scan…</div>';
+  lastLogLength = 0;
   scanProgressModal.classList.remove('hidden');
   scanProgressModal.classList.add('flex');
-  startProgressPoll();
 }
 
 function closeScanProgress() {
   scanProgressModal.classList.add('hidden');
   scanProgressModal.classList.remove('flex');
-  stopProgressPoll();
 }
 
-function startProgressPoll() {
-  stopProgressPoll();
-  fetchProgress();
-  progressTimer = setInterval(fetchProgress, 1500);
+// Normalize the /api/scan/progress payload into an array of strings.
+function toLogLines(data) {
+  if (Array.isArray(data)) return data.map(x => String(x));
+  if (typeof data === 'string') return data.split(/\r?\n/);
+  if (data && typeof data === 'object') {
+    if (Array.isArray(data.lines)) return data.lines.map(x => String(x));
+    if (Array.isArray(data.log)) return data.log.map(x => String(x));
+    if (Array.isArray(data.logs)) return data.logs.map(x => String(x));
+    if (typeof data.output === 'string') return data.output.split(/\r?\n/);
+    if (typeof data.text === 'string') return data.text.split(/\r?\n/);
+  }
+  return [];
 }
 
-function stopProgressPoll() {
-  if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+// Classify a log line for styling + queue semantics.
+function classifyLine(line) {
+  const t = line.trim();
+  if (!t) return { cls: 'ps-empty', icon: '' };
+  if (/^→.*Scanning/i.test(t) || /^Scanning/i.test(t))
+    return { cls: 'ps-active', icon: '⟳' };          // currently scanning
+  if (/^\[ALERT\]/.test(t) || /new post/i.test(t) || /posts found/i.test(t))
+    return { cls: 'ps-done', icon: '✓' };            // profile finished
+  if (/login|checkpoint|2fa|timed out|error|failed|skipping/i.test(t))
+    return { cls: 'ps-pending', icon: '!' };          // auth / warning
+  if (/Scroll|Followers|Loaded session|session still valid|Stopped early|Dated|Total posts/i.test(t))
+    return { cls: 'ps-info', icon: '·' };            // sub-step info
+  return { cls: 'ps-info', icon: '·' };
 }
 
-async function fetchProgress() {
-  try {
-    const p = await api('/api/scan/progress');
-    renderScanProgress(p);
-    // Scan finished: close dashboard, show results.
-    if (!p.running && p.profiles.length > 0 && scanning) {
-      stopProgressPoll();
-      scanning = false;
-      $('runBtn').innerHTML = '▶ Run Scan';
-      $('runBtn').disabled = false;
-      $('statusBadge').className = 'badge live';
-      $('statusBadge').textContent = '● Idle';
-      setTimeout(async () => {
-        closeScanProgress();
-        await loadAll();
-        await showScanResults();
-      }, 900);
-    }
-  } catch (e) { /* ignore transient errors */ }
-}
-
-function renderScanProgress(p) {
-  const profiles = p.profiles || [];
-  const total = profiles.length;
-  const done = profiles.filter(x => ['completed', 'failed', 'cancelled'].includes(x.status)).length;
-  const scanningNow = profiles.filter(x => x.status === 'scanning').length;
-
-  $('scanProgressTitle').textContent = p.running ? 'Scan in progress…' : 'Scan complete';
-  $('scanProgressSpinner').style.display = p.running ? 'inline-block' : 'none';
-
-  if (!total) {
-    $('scanProgressCount').textContent = 'Starting…';
-    $('scanProgressPct').textContent = '0%';
-    $('scanProgressBar').style.width = '0%';
-    $('scanProfileList').innerHTML = '';
+function renderScanLog(lines) {
+  const list = $('scanProfileList');
+  if (!lines.length) {
+    list.innerHTML = '<div class="ps-empty text-[var(--muted)] text-sm p-4">Waiting for scan output…</div>';
     return;
   }
-
-  $('scanProgressCount').textContent = `${done} of ${total} complete${scanningNow ? ' · scanning ' + scanningNow : ''}`;
-  const pct = Math.round((done / total) * 100);
-  $('scanProgressPct').textContent = pct + '%';
-  $('scanProgressBar').style.width = pct + '%';
-
-  $('scanProfileList').innerHTML = profiles.map(renderProfileRow).join('');
+  list.innerHTML = lines.map(raw => {
+    const line = raw.replace(/\r$/, '');
+    if (!line.trim()) return '';
+    const { cls, icon } = classifyLine(line);
+    return `<div class="ps-item ${cls}"><span class="ps-ico">${icon}</span><span class="ps-name" style="white-space:pre-wrap;word-break:break-word">${escapeHtml(line)}</span></div>`;
+  }).join('');
+  // Auto-scroll to bottom so the newest line (current profile) is visible.
+  list.scrollTop = list.scrollHeight;
 }
 
-function renderProfileRow(p) {
-  const c = PLATFORM_COLORS[p.platform] || '#5b8cff';
-  let badge = '';
-  if (p.status === 'scanning') {
-    badge = '<span class="ps-badge ps-scanning"><span class="spinner"></span> Scanning</span>';
-  } else if (p.status === 'completed') {
-    badge = `<span class="ps-badge ps-completed">✓ ${p.new_posts} new</span>`;
-  } else if (p.status === 'failed') {
-    badge = '<span class="ps-badge ps-failed">✕ Failed</span>';
-  } else if (p.status === 'cancelled') {
-    badge = '<span class="ps-badge ps-cancelled">Cancelled</span>';
-  } else {
-    badge = '<span class="ps-badge ps-pending">Queued</span>';
+// Derive a rough progress percentage from the log: count finished
+// profiles (ALERT / "posts found" lines) vs total profiles.
+function deriveProgress(lines) {
+  const total = allProfiles.length || 0;
+  if (!total) return null;
+  let done = 0;
+  for (const l of lines) {
+    if (/^\[ALERT\]/.test(l.trim()) || /\d+\s+posts found/i.test(l.trim())) done++;
   }
-  const err = (p.status === 'failed' && p.error)
-    ? `<span class="ps-error">${escapeHtml(p.error)}</span>` : '';
-  return `
-    <div class="ps-row ps-${p.status}">
-      <span class="ps-dot" style="background:${c}"></span>
-      <div class="ps-info">
-        <span class="ps-name">${escapeHtml(p.name)}</span>
-        <span class="ps-platform">${escapeHtml(p.platform)}</span>
-        ${err}
-      </div>
-      ${badge}
-    </div>`;
+  if (done > total) done = total;
+  return Math.round((done / total) * 100);
 }
 
-function cancelScan() {
-  api('/api/scan/cancel', { method: 'POST' })
-    .then(() => toast('Cancelling… (stops after current profile)'))
-    .catch(() => toast('Cancel failed'));
+function setScanProgressError(msg) {
+  $('scanProgressTitle').textContent = 'Scan error';
+  $('scanProgressCount').textContent = 'Error: ' + (msg || 'unknown');
 }
 
-$('scanProgressCancel').onclick = cancelScan;
+// Poll /api/scan/progress for live logs AND /api/scan/status for completion.
+function startScanProgressPoll(scanStartedAt) {
+  if (scanProgressPoll) clearInterval(scanProgressPoll);
+  scanProgressPoll = setInterval(async () => {
+    // 1) Fetch live log buffer.
+    try {
+      const data = await api('/api/scan/progress');
+      const lines = toLogLines(data);
+      renderScanLog(lines);
+      const pct = deriveProgress(lines);
+      if (pct != null) {
+        $('scanProgressBar').style.width = pct + '%';
+        $('scanProgressPct').textContent = pct + '%';
+      }
+      // Status text: last non-empty line.
+      const last = [...lines].reverse().find(l => l.trim());
+      $('scanProgressCount').textContent = last ? last.trim().slice(0, 80) : 'Scanning…';
+    } catch (e) {
+      console.error('progress fetch error', e);
+    }
 
-/* ============================================================
- * Run Scan — opens the dashboard, captures baseline, triggers
- * the scan, and lets the progress poll drive completion.
- * ============================================================ */
+    // 2) Check if the scan finished.
+    try {
+      const st = await api('/api/scan/status');
+      if (!st.running) {
+        clearInterval(scanProgressPoll); scanProgressPoll = null;
+        closeScanProgress();
+        $('runBtn').innerHTML = '▶ Run Scan';
+        $('runBtn').disabled = false;
+        $('statusBadge').className = 'badge live'; $('statusBadge').textContent = '● Idle';
+        scanning = false;
+        await loadAll();
+        await showScanResults(scanStartedAt);
+      }
+    } catch (e) {
+      console.error('status fetch error', e);
+    }
+  }, 1500);
+}
+
+// Run Scan — captures baseline, triggers scan, opens progress modal, shows results.
 $('runBtn').onclick = async () => {
   if (scanning) return;
   scanning = true;
-  scanStartedAt = Date.now();
-  try { await captureBaseline(); } catch (e) { scanBaseline = null; }
+  openScanProgress();
+
+  const scanStartedAt = Date.now();
   $('runBtn').innerHTML = '<span class="spinner"></span> Running…';
   $('runBtn').disabled = true;
-  $('statusBadge').className = 'badge busy';
-  $('statusBadge').textContent = '● Running';
-  openScanProgress();
-  try { await api('/api/scan/run', { method: 'POST' }); }
-  catch (e) { toast('Failed: ' + e.message); closeScanProgress(); scanning = false; }
+  $('statusBadge').className = 'badge busy'; $('statusBadge').textContent = '● Running';
+  try { await api('/api/scan/run', { method: 'POST' }); toast('Scan started'); }
+  catch (e) {
+    toast('Failed: ' + e.message);
+    closeScanProgress();
+    if (scanProgressPoll) { clearInterval(scanProgressPoll); scanProgressPoll = null; }
+    scanning = false;
+    $('runBtn').innerHTML = '▶ Run Scan';
+    $('runBtn').disabled = false;
+    $('statusBadge').className = 'badge live'; $('statusBadge').textContent = '● Idle';
+    return;
+  }
+
+  startScanProgressPoll(scanStartedAt);
 };
+
+// Close progress view without aborting the backend scan.
+$('scanProgressCancel').onclick = () => {
+  if (scanProgressPoll) { clearInterval(scanProgressPoll); scanProgressPoll = null; }
+  closeScanProgress();
+  toast('Progress view closed (scan continues in background)');
+};
+scanProgressModal.addEventListener('click', e => { if (e.target === scanProgressModal) closeScanProgress(); });
 
 loadAll();
 setInterval(loadAll, 30000);
