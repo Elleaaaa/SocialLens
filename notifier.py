@@ -1,4 +1,5 @@
 """Pluggable notifications. Add new channels by subclassing Notifier."""
+
 import requests
 
 
@@ -14,6 +15,7 @@ class ConsoleNotifier(Notifier):
 
 class WebhookNotifier(Notifier):
     """Generic JSON webhook (Slack/Discord/Telegram compatible)."""
+
     def __init__(self, url):
         self.url = url
 

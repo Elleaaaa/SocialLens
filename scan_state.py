@@ -21,10 +21,8 @@ def init_progress(profiles):
         _progress["running"] = True
         _progress["profiles"] = [
             {
-                "id": p["id"],
                 "name": p["name"],
                 "platform": p["platform"],
-                "url": p["url"],
                 "status": "pending",
                 "error": None,
                 "new_posts": 0,

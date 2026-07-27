@@ -387,7 +387,7 @@ function openScanResults(newPosts, runTime) {
       <tr>
         <td>${escapeHtml(p.title || '(untitled)')}</td>
         <td>${escapeHtml(p.profile_name || p.platform || '—')}</td>
-        <td>${fmtDateTime(p.detected_at)}</td>
+        <td>${fmtDateTime(p.published_at)}</td>
         <td><a href="${escapeHtml(p.url || '#')}" target="_blank"
                class="text-[var(--accent)] hover:underline">Open</a></td>
         <td><span class="badge live">New</span></td>

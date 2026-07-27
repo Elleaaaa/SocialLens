@@ -1,14 +1,25 @@
 # monitors/youtube.py
 """YouTube channel monitor.
 
-No login or browser required. Uses two approaches:
+No login or browser required. Uses YouTube's internal (InnerTube) API
+with the shared public web key — no personal API key, no quota, no
+Google Cloud setup.
 
-1. First run (empty database): YouTube internal API with pagination
-   to scrape ALL video IDs. No exact dates (Shorts don't expose them
-   in the API), so detected_at is used as fallback.
+Scanning logic (applies on EVERY scan):
+  - Walk videos newest-first via paginated InnerTube browse.
+  - Stop as soon as a post is older than FIRST_SCAN_DAYS_LIMIT (7) days
+    (7-day cutoff), OR at the first already-seen video (incremental
+    stop). Whichever triggers first wins.
+  - is_older_than_days() returns False for missing/unparseable dates,
+    so Shorts (which expose no date in the API) are kept until the
+    incremental stop catches them.
 
-2. Subsequent runs: YouTube RSS feed returns the latest 15 videos
-   with exact publish dates. Stops at first already-seen video.
+Publish dates:
+  - The RSS feed supplies exact dates for the latest 15 videos.
+  - Regular videos expose relative publishedTimeText ("2 days ago"),
+    parsed into an approximate date used to evaluate the 7-day stop.
+  - Exact dates for the collected in-window subset are fetched from
+    each video page; detected_at is the fallback when no date is found.
 
 Subscriber count comes from the internal browse API.
 
@@ -19,21 +30,22 @@ to a consent page).
 
 import asyncio
 import json
-import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from monitors.base import BaseMonitor, parse_count
-from config import DELAY_BETWEEN_POSTS_SEC, MAX_POSTS_TO_DATE
+from monitors.base import BaseMonitor, parse_count, is_older_than_days
+from config import DELAY_BETWEEN_POSTS_SEC, FIRST_SCAN_DAYS_LIMIT
 
-YT_API_KEY = os.environ.get("YT_API_KEY", "")
+# Shared public InnerTube web key — the same key YouTube's own web
+# player uses. Free, no signup, no quota. Used for all browse calls.
+_INNERTUBE_WEB_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+
 YT_BROWSE_URL = "https://www.youtube.com/youtubei/v1/browse"
 YT_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
 CHANNEL_ID_RE = re.compile(r"(UC[\w-]{22})")
-HANDLE_RE = re.compile(r"@([\w.\-]+)")
 CANONICAL_RE = re.compile(
     r'<link\s+rel="canonical"\s+href="https://www\.youtube\.com/channel/(UC[\w-]+)"'
 )
@@ -41,6 +53,21 @@ META_CHANNEL_RE = re.compile(
     r'<meta\s+itemprop=["\']channelId["\']\s+content="(UC[\w-]+)"'
 )
 SUBSCRIBER_RE = re.compile(r'"content"\s*:\s*"([\d.,]+\s*[KMBkmb]?\s*subscribers)"')
+
+# "2 days ago", "3 weeks ago", "1 month ago", "Streamed 2 days ago", etc.
+RELATIVE_DATE_RE = re.compile(
+    r"(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago",
+    re.IGNORECASE,
+)
+_RELATIVE_DAYS = {
+    "second": 0,
+    "minute": 0,
+    "hour": 0,
+    "day": 1,
+    "week": 7,
+    "month": 30,
+    "year": 365,
+}
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -61,6 +88,10 @@ class YouTubeMonitor(BaseMonitor):
         super().__init__(page, profile)
         self._channel_id = None
         self._channel_url = profile["url"]
+
+    # ------------------------------------------------------------------
+    # Channel ID resolution (httpx with browser fallback)
+    # ------------------------------------------------------------------
 
     async def _resolve_channel_id(self):
         """Resolve a YouTube URL to a channel ID.
@@ -89,64 +120,44 @@ class YouTubeMonitor(BaseMonitor):
                 r = await client.get(url)
                 html = r.text
 
-                m = CANONICAL_RE.search(html)
-                if m:
-                    self._channel_id = m.group(1)
-                    print(f"  - Channel ID: {self._channel_id}")
-                    return self._channel_id
-
-                m = META_CHANNEL_RE.search(html)
-                if m:
-                    self._channel_id = m.group(1)
-                    print(f"  - Channel ID: {self._channel_id}")
-                    return self._channel_id
-
-                m = CHANNEL_ID_RE.search(html)
-                if m:
-                    self._channel_id = m.group(1)
-                    print(f"  - Channel ID: {self._channel_id}")
-                    return self._channel_id
+                for rx in (CANONICAL_RE, META_CHANNEL_RE, CHANNEL_ID_RE):
+                    m = rx.search(html)
+                    if m:
+                        self._channel_id = m.group(1)
+                        print(f"  - Channel ID: {self._channel_id}")
+                        return self._channel_id
         except Exception as exc:
             print(f"  - httpx channel resolution failed: {exc}")
 
-        # Fallback: browser page (if available — YouTube may redirect
-        # non-browser clients to a consent page)
+        # Fallback: browser page (YouTube may redirect non-browser
+        # clients to a consent page)
         if self.page:
             try:
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 await self.page.wait_for_timeout(3000)
-
                 html = await self.page.content()
 
-                m = CANONICAL_RE.search(html)
-                if m:
-                    self._channel_id = m.group(1)
-                    print(f"  - Channel ID: {self._channel_id}")
-                    return self._channel_id
-
-                m = META_CHANNEL_RE.search(html)
-                if m:
-                    self._channel_id = m.group(1)
-                    print(f"  - Channel ID: {self._channel_id}")
-                    return self._channel_id
-
-                m = CHANNEL_ID_RE.search(html)
-                if m:
-                    self._channel_id = m.group(1)
-                    print(f"  - Channel ID: {self._channel_id}")
-                    return self._channel_id
+                for rx in (CANONICAL_RE, META_CHANNEL_RE, CHANNEL_ID_RE):
+                    m = rx.search(html)
+                    if m:
+                        self._channel_id = m.group(1)
+                        print(f"  - Channel ID: {self._channel_id}")
+                        return self._channel_id
             except Exception as exc:
                 print(f"  ! Error resolving channel ID via browser: {exc}")
 
         print("  ! Could not resolve YouTube channel ID")
         return None
 
-    async def _api_browse(self, client, browse_id=None, continuation=None):
-        """Call YouTube internal browse API."""
-        if not YT_API_KEY:
-            print("  ! YT_API_KEY not set in environment")
-            return None
+    # ------------------------------------------------------------------
+    # InnerTube browse API
+    # ------------------------------------------------------------------
 
+    async def _api_browse(self, client, browse_id=None, continuation=None):
+        """Call YouTube internal (InnerTube) browse API.
+
+        Uses the shared public web key — no personal API key required.
+        """
         payload = {
             "context": {
                 "client": {
@@ -165,7 +176,7 @@ class YouTubeMonitor(BaseMonitor):
 
         r = await client.post(
             YT_BROWSE_URL,
-            params={"key": YT_API_KEY},
+            params={"key": _INNERTUBE_WEB_KEY},
             json=payload,
         )
         return r.json() if r.status_code == 200 else None
@@ -239,7 +250,7 @@ class YouTubeMonitor(BaseMonitor):
         return search(data)
 
     def _get_contents_from_response(self, data):
-        """Extract contents list from API response (handles both first page and continuation)."""
+        """Extract contents list from API response (first page or continuation)."""
         on_resp = data.get("onResponseReceivedActions", [])
         if on_resp:
             for action in on_resp:
@@ -262,6 +273,10 @@ class YouTubeMonitor(BaseMonitor):
             .get("richGridRenderer", {})
             .get("contents", [])
         )
+
+    # ------------------------------------------------------------------
+    # Stats
+    # ------------------------------------------------------------------
 
     async def fetch_stats(self):
         """Get subscriber count from the YouTube internal API."""
@@ -286,7 +301,7 @@ class YouTubeMonitor(BaseMonitor):
             async with httpx.AsyncClient(timeout=30, headers=DEFAULT_HEADERS) as client:
                 r = await client.post(
                     YT_BROWSE_URL,
-                    params={"key": YT_API_KEY} if YT_API_KEY else {},
+                    params={"key": _INNERTUBE_WEB_KEY},
                     json=payload,
                 )
 
@@ -313,13 +328,24 @@ class YouTubeMonitor(BaseMonitor):
             self.followers = 0
             return self.followers
 
+    # ------------------------------------------------------------------
+    # Posts
+    # ------------------------------------------------------------------
+
     async def fetch_posts(self, seen_shortcodes=None):
-        """Fetch videos via internal API with pagination.
-        Always uses the API to get all videos (newest first), stopping
-        early when hitting an already-seen video. Also fetches the RSS
-        feed to get exact publish dates for the latest 15 videos.
-        For Shorts, the API does not expose exact publish dates, so
-        detected_at is used as fallback for older videos.
+        """Fetch videos via the InnerTube API with pagination.
+
+        Walks videos newest-first and stops as soon as it hits either:
+          - a post older than FIRST_SCAN_DAYS_LIMIT (7) days (7-day cutoff), or
+          - an already-seen video (incremental stop).
+        Whichever triggers first wins. This applies on EVERY scan.
+
+        RSS supplies exact dates for the latest 15 videos; relative
+        publishedTimeText is parsed into an approximate date used only to
+        evaluate the 7-day stop. Exact dates for the collected in-window
+        subset are then fetched from the video pages. Shorts expose no
+        date in the API, so is_older_than_days() returns False for them
+        and they are kept until the incremental stop catches them.
         """
         if seen_shortcodes is None:
             seen_shortcodes = set()
@@ -327,11 +353,10 @@ class YouTubeMonitor(BaseMonitor):
         if not channel_id:
             return []
 
-        # Use a single httpx client for all requests in this scan
         async with httpx.AsyncClient(timeout=30, headers=DEFAULT_HEADERS) as client:
-            # Fetch RSS to get exact dates for the latest 15 videos
+            # RSS: exact dates for the latest 15 videos (no key, one request)
             rss_dates = await self._fetch_rss_dates(client, channel_id)
-            # Fetch all videos via API with pagination
+            # Paginated collection with both stop rules
             return await self._fetch_all_via_api(
                 client, channel_id, seen_shortcodes, rss_dates
             )
@@ -352,22 +377,25 @@ class YouTubeMonitor(BaseMonitor):
                         rss_dates[vid_m.group(1)] = self._normalize_datetime(
                             pub_m.group(1)
                         )
-                print(
-                    f"  - RSS: got exact dates for " f"{len(rss_dates)} latest videos"
-                )
+                print(f"  - RSS: got exact dates for {len(rss_dates)} latest videos")
         except Exception as exc:
             print(f"  ! YouTube RSS error: {exc}")
         return rss_dates
 
     async def _fetch_all_via_api(self, client, channel_id, seen_shortcodes, rss_dates):
-        """Fetch all videos via internal API with pagination.
-        Stops early when hitting an already-seen video (incremental).
-        Fetches exact publish dates from each video page.
+        """Fetch videos via the InnerTube API, newest first.
+
+        Stops as soon as it hits either:
+          - a post older than FIRST_SCAN_DAYS_LIMIT days (7-day cutoff), or
+          - an already-seen video (incremental stop).
+        Whichever triggers first wins. A post with a missing/unparseable
+        date is kept (is_older_than_days() returns False) rather than
+        discarded.
         """
-        all_videos = []
+        collected = []
         page = 0
         cont_token = None
-        stopped_early = False
+        stop_reason = None
         try:
             while True:
                 page += 1
@@ -379,19 +407,44 @@ class YouTubeMonitor(BaseMonitor):
                 contents = self._get_contents_from_response(data)
                 videos = self._extract_videos_from_contents(contents)
                 for v in videos:
-                    if v["video_id"] in seen_shortcodes:
+                    vid = v["video_id"]
+                    if not vid:
+                        continue
+
+                    # Best available date for the 7-day check: exact RSS
+                    # date first, else approximate from publishedTimeText.
+                    # Shorts have no text, so this stays None for them.
+                    published_at = rss_dates.get(vid) or self._approx_date_from_text(
+                        v.get("published_text", "")
+                    )
+
+                    # Incremental stop: already in the database.
+                    if vid in seen_shortcodes:
                         print(
-                            f"  - Stopped early: hit already-seen "
-                            f"video ({v['video_id']}) on page {page}"
+                            f"  - Stopped early: hit already-seen video "
+                            f"({vid}) on page {page}"
                         )
-                        stopped_early = True
+                        stop_reason = "seen"
                         break
-                    all_videos.append(v)
-                if stopped_early:
+
+                    # 7-day cutoff: older than the scan window.
+                    if is_older_than_days(published_at, FIRST_SCAN_DAYS_LIMIT):
+                        print(
+                            f"  - Stopped early: video {vid} older than "
+                            f"{FIRST_SCAN_DAYS_LIMIT} days (page {page})"
+                        )
+                        stop_reason = "age"
+                        break
+
+                    v["published_at"] = published_at
+                    collected.append(v)
+
+                if stop_reason:
                     break
+
                 print(
                     f"  - Page {page}: {len(videos)} videos "
-                    f"(total: {len(all_videos)})"
+                    f"(collected: {len(collected)})"
                 )
                 cont_token = self._find_continuation_token(data)
                 if not cont_token:
@@ -406,28 +459,22 @@ class YouTubeMonitor(BaseMonitor):
         # Deduplicate
         seen = set()
         unique = []
-        for v in all_videos:
+        for v in collected:
             if v["video_id"] and v["video_id"] not in seen:
                 seen.add(v["video_id"])
                 unique.append(v)
-        print(f"  - Total unique videos: {len(unique)}")
+        print(f"  - Unique in-window videos: {len(unique)}")
 
-        # Apply MAX_POSTS_TO_DATE cap if set
-        limit = MAX_POSTS_TO_DATE if MAX_POSTS_TO_DATE > 0 else len(unique)
-        unique = unique[:limit]
-        if MAX_POSTS_TO_DATE > 0 and len(unique) == MAX_POSTS_TO_DATE:
-            print(f"  - Capped at {MAX_POSTS_TO_DATE} videos for date extraction")
-
-        # Fetch exact publish dates from video pages
-        print("  - Fetching publish dates from video pages...")
+        # Enrich: exact publish dates for the collected in-window subset
+        # only. RSS dates are already exact; the approximate
+        # publishedTimeText date was used solely for the stop decision.
+        print("  - Fetching exact publish dates for collected videos...")
         posts = []
         dated_count = 0
         for i, v in enumerate(unique):
             video_id = v["video_id"]
             title = v["title"]
-            # Use RSS date if available (saves a request)
             published_at = rss_dates.get(video_id)
-            # Otherwise fetch from video page
             if not published_at:
                 published_at = await self._fetch_video_date(client, video_id)
                 await asyncio.sleep(0.5)  # Rate limit courtesy
@@ -448,8 +495,33 @@ class YouTubeMonitor(BaseMonitor):
         print(f"  - Total: {len(posts)} videos collected")
         return posts
 
+    # ------------------------------------------------------------------
+    # Date helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _approx_date_from_text(text):
+        """Parse relative text like '2 days ago' / '3 weeks ago' into an
+        approximate ISO datetime in UTC.
+
+        Used ONLY to evaluate the 7-day stop cutoff for regular videos not
+        covered by the RSS feed. Returns None if unparseable, in which case
+        is_older_than_days() returns False and the post is kept.
+        """
+        if not text:
+            return None
+        m = RELATIVE_DATE_RE.search(text)
+        if not m:
+            return None
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        days = n * _RELATIVE_DAYS.get(unit, 0)
+        dt = datetime.now(timezone.utc) - timedelta(days=days)
+        return dt.isoformat()
+
     async def _fetch_video_date(self, client, video_id):
         """Fetch exact publish date from a YouTube video page.
+
         YouTube embeds the date as:
         "dateText":{"simpleText":"Jun 23, 2026"}
         """
@@ -471,11 +543,11 @@ class YouTubeMonitor(BaseMonitor):
                     html,
                 )
                 if m:
-                    return self._parse_date_text(m.group(1))
+                    return YouTubeMonitor._parse_date_text(m.group(1))
                 # Fallback: look for "uploadDate" in JSON-LD
                 m = re.search(r'"uploadDate"\s*:\s*"([^"]+)"', html)
                 if m:
-                    return self._normalize_datetime(m.group(1))
+                    return YouTubeMonitor._normalize_datetime(m.group(1))
                 return None
             except Exception as exc:
                 if attempt == 2:
@@ -486,16 +558,12 @@ class YouTubeMonitor(BaseMonitor):
     @staticmethod
     def _parse_date_text(text):
         """Parse YouTube date text like 'Jun 23, 2026' to ISO format."""
-        try:
-            # YouTube uses format like "Jun 23, 2026" or "23 Jun 2026"
-            for fmt in ("%b %d, %Y", "%d %b %Y", "%B %d, %Y", "%d %B %Y"):
-                try:
-                    dt = datetime.strptime(text.strip(), fmt)
-                    return dt.replace(tzinfo=timezone.utc).isoformat()
-                except ValueError:
-                    continue
-        except Exception:
-            pass
+        for fmt in ("%b %d, %Y", "%d %b %Y", "%B %d, %Y", "%d %B %Y"):
+            try:
+                dt = datetime.strptime(text.strip(), fmt)
+                return dt.replace(tzinfo=timezone.utc).isoformat()
+            except ValueError:
+                continue
         return None
 
     @staticmethod
