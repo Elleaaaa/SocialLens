@@ -198,15 +198,32 @@ def _get_state_file(platform):
     return None
 
 
-async def run_scan():
-    """Run a full scan across all profiles."""
+async def run_scan(fresh=False):
+    """Run a scan across all profiles.
+
+    By default resumes from the first non-completed profile when a
+    previous interrupted scan left resumable state (completed profiles
+    are skipped, failed/cancelled/pending are retried). Pass fresh=True
+    to force a full re-scan from the beginning.
+    """
     conn = get_conn()
     profiles = get_profiles()
 
     print(f"=== Scan started at {datetime.now(timezone.utc).isoformat()} ===")
-    scan_state.init_progress(profiles)
+    scan_state.init_progress(profiles, fresh=fresh)
 
-    for i, profile in enumerate(profiles):
+    start_index = scan_state.get_resume_index()
+    if start_index > 0:
+        print(
+            f"  - Resuming from profile #{start_index + 1} "
+            f"({start_index} already completed)"
+        )
+    elif start_index == len(profiles):
+        print("  - All profiles already completed; nothing to do")
+
+    for i in range(start_index, len(profiles)):
+        profile = profiles[i]
+
         # Check for cancel before starting each profile
         if scan_state.is_cancelled():
             scan_state.set_cancelled_remaining(i)

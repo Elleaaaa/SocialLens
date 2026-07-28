@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     platform TEXT NOT NULL,
     name TEXT NOT NULL,
     url TEXT NOT NULL,
+    company TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -67,6 +68,10 @@ def init_db():
     cols = [row["name"] for row in conn.execute("PRAGMA table_info(posts)")]
     if "published_at" not in cols:
         conn.execute("ALTER TABLE posts ADD COLUMN published_at TEXT")
+    # Add company column to existing profiles tables (no-op if already present)
+    profile_cols = [row["name"] for row in conn.execute("PRAGMA table_info(profiles)")]
+    if "company" not in profile_cols:
+        conn.execute("ALTER TABLE profiles ADD COLUMN company TEXT")
     _migrate_profiles_from_json(conn)
     conn.commit()
     conn.close()
@@ -106,8 +111,8 @@ def _migrate_profiles_from_json(conn):
             data = json.load(f)
         for p in data.get("profiles", []):
             conn.execute(
-                "INSERT OR IGNORE INTO profiles (id, platform, name, url, created_at) VALUES (?, ?, ?, ?, ?)",
-                (p["id"], p["platform"], p["name"], p["url"], _now()),
+                "INSERT OR IGNORE INTO profiles (id, platform, name, url, company, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (p["id"], p["platform"], p["name"], p["url"], p.get("company"), _now()),
             )
         print(
             f"  [migration] Imported {len(data.get('profiles', []))} profiles from JSON to DB"
@@ -130,12 +135,12 @@ def get_profile(conn, profile_id):
     return dict(row) if row else None
 
 
-def add_profile(conn, platform, name, url):
+def add_profile(conn, platform, name, url, company=""):
     """Create a new profile with an auto-generated ID."""
     new_id = f"{platform[:2]}-{uuid.uuid4().hex[:8]}"
     conn.execute(
-        "INSERT INTO profiles (id, platform, name, url, created_at) VALUES (?, ?, ?, ?, ?)",
-        (new_id, platform, name, url, _now()),
+        "INSERT INTO profiles (id, platform, name, url, company, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (new_id, platform, name, url, company, _now()),
     )
     conn.commit()
     return new_id
@@ -237,7 +242,8 @@ def get_posts_filtered(
     offset = max(int(offset or 0), 0)
 
     query = f"""
-        SELECT p.*, pr.name as profile_name, pr.platform as profile_platform
+        SELECT p.*, pr.name as profile_name, pr.platform as profile_platform,
+               pr.company as profile_company
         FROM posts p
         LEFT JOIN profiles pr ON p.profile_id = pr.id
         {where}

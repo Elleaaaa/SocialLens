@@ -99,13 +99,14 @@
             <tr>
               <th data-sort="platform" data-dir="asc">Platform <span class="sort-arrow"></span></th>
               <th data-sort="profile_id" data-dir="asc">Account <span class="sort-arrow"></span></th>
+              <th>Company <span class="sort-arrow"></span></th>
               <th data-sort="title" data-dir="asc">Post <span class="sort-arrow"></span></th>
               <th data-sort="published_at" data-dir="desc">Date Posted <span class="sort-arrow">&#9660;</span></th>
             </tr>
           </thead>
           <tbody id="postsBody">
             <tr>
-              <td colspan="4" class="text-center text-[var(--muted)] py-6">Select filters and click <b>Load Posts</b> to
+              <td colspan="5" class="text-center text-[var(--muted)] py-6">Select filters and click <b>Load Posts</b> to
                 view data.</td>
             </tr>
           </tbody>
@@ -140,6 +141,9 @@
       </select>
       <label class="text-xs text-[var(--muted)] block mb-1">Display name</label>
       <input id="mName" placeholder="My Brand" class="w-full mb-3 p-2.5 rounded-lg border border-[var(--border)]"
+        style="background:var(--bg)" />
+      <label class="text-xs text-[var(--muted)] block mb-1">Company</label>
+      <input id="mCompany" placeholder="Acme Inc. (optional)" class="w-full mb-3 p-2.5 rounded-lg border border-[var(--border)]"
         style="background:var(--bg)" />
       <label class="text-xs text-[var(--muted)] block mb-1">Profile URL</label>
       <input id="mUrl" placeholder="https://www.instagram.com/username"
@@ -179,6 +183,7 @@
               <tr>
                 <th>Post Title</th>
                 <th>Author/Source</th>
+                <th>Company</th>
                 <th>Date Posted</th>
                 <th>URL/Link</th>
                 <th>Status</th>

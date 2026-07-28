@@ -296,6 +296,7 @@ def api_profiles(from_date: str = None, to_date: str = None):
                 "platform": p["platform"],
                 "name": p["name"],
                 "url": p["url"],
+                "company": p.get("company") or "",
                 "total_posts": s["total"],
                 "followers": get_latest_metric(conn, p["id"]),
                 "metric_label": PLATFORM_METRIC_LABEL.get(p["platform"], "followers"),
@@ -367,6 +368,8 @@ def api_posts(
     for post in posts:
         if "profile_name" not in post or not post["profile_name"]:
             post["profile_name"] = post.get("profile_id", "unknown")
+        if "profile_company" not in post:
+            post["profile_company"] = ""
 
     return {
         "posts": posts,
@@ -411,13 +414,17 @@ def api_posts_export(
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(
-            ["Platform", "Account", "Title", "URL", "Published", "Detected"]
+            ["Platform", "Account", "Company", "Title", "URL", "Published", "Detected"]
         )
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
         for post in posts:
             writer.writerow(
                 [
                     post.get("platform", ""),
                     post.get("profile_name", post.get("profile_id", "")),
+                    post.get("profile_company", "") or "",
                     post.get("title", ""),
                     post.get("url", ""),
                     post.get("published_at", ""),
@@ -425,6 +432,8 @@ def api_posts_export(
                 ]
             )
             yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
 
     return StreamingResponse(
         generate(),
@@ -437,6 +446,7 @@ class ProfileIn(BaseModel):
     platform: str
     name: str
     url: str
+    company: str = ""
 
     @field_validator("platform")
     @classmethod
@@ -468,11 +478,25 @@ class ProfileIn(BaseModel):
             raise ValueError("Name too long")
         return v
 
+    @field_validator("company")
+    @classmethod
+    def validate_company(cls, v: str) -> str:
+        if len(v) > 200:
+            raise ValueError("Company too long")
+        return v
+
+    @field_validator("company")
+    @classmethod
+    def validate_company(cls, v: str) -> str:
+        if len(v) > 200:
+            raise ValueError("Company too long")
+        return v
+
 
 @app.post("/api/profiles")
 def api_add_profile(p: ProfileIn):
     conn = get_conn()
-    new_id = add_profile(conn, p.platform, p.name, p.url)
+    new_id = add_profile(conn, p.platform, p.name, p.url, p.company)
     conn.close()
     return {"status": "added", "id": new_id}
 
@@ -506,13 +530,15 @@ def api_scan_cancel():
 
 
 @app.post("/api/scan/run")
-def api_trigger_scan():
+def api_trigger_scan(fresh: bool = False):
     if scan_running.is_set():
         return {"status": "already_running"}
 
-    # Reset cancel flag + clear progress for a fresh scan.
+    # Reset cancel flag. Do NOT clear_progress() here — init_progress()
+    # inside run_scan() will resume from the previous interrupted scan
+    # (keeping completed profiles) or start fresh when appropriate.
+    # Pass ?fresh=true to force a full re-scan.
     scan_state.reset_cancel()
-    scan_state.clear_progress()
 
     # Set the flag IMMEDIATELY so the frontend's first status poll sees
     # running=True (avoids a false "scan complete").
@@ -522,7 +548,9 @@ def api_trigger_scan():
         from main import run_scan
 
         try:
-            asyncio.run(asyncio.wait_for(run_scan(), timeout=SCAN_TIMEOUT_SEC))
+            asyncio.run(
+                asyncio.wait_for(run_scan(fresh=fresh), timeout=SCAN_TIMEOUT_SEC)
+            )
         except asyncio.TimeoutError:
             print("  ! Scan timed out")
         except Exception as exc:
@@ -533,7 +561,7 @@ def api_trigger_scan():
             scan_state.finish_progress()
 
     threading.Thread(target=_do_scan, daemon=True).start()
-    return {"status": "started"}
+    return {"status": "started", "fresh": fresh}
 
 
 # Proxy /vnc/ requests to the websockify/noVNC server

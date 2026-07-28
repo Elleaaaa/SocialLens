@@ -57,7 +57,7 @@ function postQueryParams() {
   if (profile) p.set('profile_id', profile);
   if (search) p.set('search', search);
   p.set('sort_by', sortBy);
- ![](data.sort_dir = sortDir);
+  p.set('sort_dir', sortDir);
   p.set('page', currentPage);
   p.set('per_page', 20);
   return p.toString();
@@ -103,28 +103,9 @@ async function loadProfiles() {
   const platforms = new Set(profiles.map(p => p.platform));
   $('kAccounts').textContent = profiles.length;
   $('kPlatforms').textContent = platforms.size;
-  populateProfilePlatformFilter(profiles);
-  populateProfileAccountFilter(profiles);
   profilePage = 0;
   renderProfiles();
   updateProfileFilter();
-}
-
-function populateProfilePlatformFilter(profiles) {
-  const sel = $('pPlatform');
-  const current = sel.value;
-  const plats = [...new Set(profiles.map(p => p.platform))];
-  sel.innerHTML = '<option value="">All Platforms</option>' +
-    plats.map(p => `<option value="${p}">${p.charAt(0).toUpperCase() + p.slice(1)}</option>`).join('');
-  sel.value = current;
-}
-
-function populateProfileAccountFilter(profiles) {
-  const sel = $('pProfile');
-  const current = sel.value;
-  sel.innerHTML = '<option value="">All Accounts</option>' +
-    profiles.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-  sel.value = current;
 }
 
 function filteredProfiles() {
@@ -133,14 +114,13 @@ function filteredProfiles() {
   return allProfiles.filter(p => {
     if (platform && p.platform !== platform) return false;
     if (profile && String(p.id) !== String(profile)) return false;
-    if (s && !((p.name + ' ' + p.url + ' ' + p.platform).toLowerCase().includes(s))) return false;
+    if (s && !((p.name + ' ' + p.url + ' ' + p.platform + ' ' + (p.company || '')).toLowerCase().includes(s))) return false;
     return true;
   });
 }
 
 function renderProfiles() {
   const wrap = $('profileList'); wrap.innerHTML = '';
-  const more = $('profileMore'); more.innerHTML = '';
   const list = filteredProfiles();
   $('profileCount').textContent = list.length + ' of ' + allProfiles.length + ' profiles';
   if (!list.length) {
@@ -163,6 +143,7 @@ function renderProfiles() {
           ${isNew ? '<span class="new-badge">NEW</span>' : ''}
         </div>
         <a href="${p.url}" target="_blank" class="text-xs text-[var(--muted)] truncate block hover:text-[var(--accent)]">${p.url}</a>
+        ${p.company ? '<p class="text-xs text-[var(--muted)] mt-0.5">Company: ' + escapeHtml(p.company) + '</p>' : ''}
         <div class="flex gap-4 mt-2 text-xs">
           <span><b class="text-sm">${fmtNum(p.total_posts)}</b> <span class="text-[var(--muted)]">posts</span></span>
           <span><b class="text-sm">${fmtNum(p.followers)}</b> <span class="text-[var(--muted)]">${p.metric_label}</span></span>
@@ -183,7 +164,7 @@ function renderProfiles() {
     btn.className = 'text-sm px-4 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]';
     btn.textContent = `Show ${Math.min(PROFILE_PAGE_SIZE, remaining)} more (${remaining} left)`;
     btn.onclick = () => { profilePage++; renderProfiles(); };
-    more.appendChild(btn);
+    wrap.appendChild(btn);
   }
 }
 
@@ -219,7 +200,7 @@ async function loadPlatformFilter() {
 async function loadPosts() {
   postsLoaded = true;
   const tb = $('postsBody');
-  tb.innerHTML = '<tr><td colspan="4" class="text-center text-[var(--muted)] py-6">Loading…</td></tr>';
+  tb.innerHTML = '<tr><td colspan="5" class="text-center text-[var(--muted)] py-6">Loading…</td></tr>';
   $('pageInfo').textContent = '';
   $('pagination').innerHTML = '';
   const q = postQueryParams();
@@ -229,7 +210,7 @@ async function loadPosts() {
     totalPages = data.total_pages;
     const posts = data.posts;
     const tb = $('postsBody');
-    if (!posts.length) { tb.innerHTML = '<tr><td colspan="4" class="text-center text-[var(--muted)] py-6">No posts found.</td></tr>'; }
+    if (!posts.length) { tb.innerHTML = '<tr><td colspan="5" class="text-center text-[var(--muted)] py-6">No posts found.</td></tr>'; }
     else {
       tb.innerHTML = posts.map(p => {
         const c = PLATFORM_COLORS[p.platform] || '#5b8cff';
@@ -237,6 +218,7 @@ async function loadPosts() {
         return `<tr>
         <td><span class="inline-flex items-center gap-1.5 font-semibold"><span class="w-2 h-2 rounded-full" style="background:${c}"></span>${p.platform}</span></td>
         <td>${p.profile_name || p.profile_id}</td>
+        <td>${escapeHtml(p.profile_company || '—')}</td>
         <td><a href="${p.url || ('https://www.instagram.com/p/' + p.post_id + '/')}" target="_blank" class="text-[var(--accent)] hover:underline" style="max-width:250px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom">${title}</a></td>
         <td class="text-[var(--muted)]">${fmtDate(p.published_at)}</td>
       </tr>`;
@@ -248,7 +230,7 @@ async function loadPosts() {
     renderPagination();
   } catch (e) {
     console.error(e);
-    tb.innerHTML = '<tr><td colspan="4" class="text-center text-[var(--red)] py-6">Error loading posts: ' + e.message + '</td></tr>';
+    tb.innerHTML = '<tr><td colspan="5" class="text-center text-[var(--red)] py-6">Error loading posts: ' + e.message + '</td></tr>';
   }
 }
 
@@ -309,19 +291,6 @@ $('fSearch').addEventListener('input', () => {
 $('fromDate').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
 $('toDate').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
 
-// Profile filter controls
-$('pPlatform').addEventListener('change', () => { profileFilter.platform = $('pPlatform').value; profilePage = 0; renderProfiles(); });
-$('pProfile').addEventListener('change', () => { profileFilter.profile = $('pProfile').value; profilePage = 0; renderProfiles(); });
-$('pSearch').addEventListener('input', () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { profileFilter.search = $('pSearch').value; profilePage = 0; renderProfiles(); }, 200);
-});
-$('pClear').onclick = () => {
-  profileFilter = { platform: '', profile: '', search: '' };
-  $('pPlatform').value = ''; $('pProfile').value = ''; $('pSearch').value = '';
-  profilePage = 0; renderProfiles();
-};
-
 $('clearFilters').onclick = () => {
   $('fPlatform').value = ''; $('fProfile').value = '';
   $('fSearch').value = ''; $('fromDate').value = ''; $('toDate').value = '';
@@ -362,8 +331,9 @@ $('mSave').onclick = async () => {
   const btn = $('mSave');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const res = await api('/api/profiles', { method: 'POST', body: JSON.stringify({ platform, name, url }) });
-    $('mName').value = ''; $('mUrl').value = '';
+    const company = $('mCompany').value.trim();
+    const res = await api('/api/profiles', { method: 'POST', body: JSON.stringify({ platform, name, url, company }) });
+    $('mName').value = ''; $('mUrl').value = ''; $('mCompany').value = '';
     closeModal();
     toast('Profile connected' + (res.id ? ' (' + res.id + ')' : ''));
     loadAll();
@@ -451,6 +421,7 @@ function openScanResults(newPosts, runTime) {
       <tr>
         <td>${escapeHtml(p.title || '(untitled)')}</td>
         <td>${escapeHtml(p.profile_name || p.platform || '—')}</td>
+        <td>${escapeHtml(p.profile_company || '—')}</td>
         <td>${fmtDateTime(p.detected_at)}</td>
         <td><a href="${escapeHtml(p.url || '#')}" target="_blank"
                class="text-[var(--accent)] hover:underline">Open</a></td>
@@ -473,10 +444,11 @@ function csvCell(v) {
 
 function exportScanCSV() {
   if (!scanResults.length) return;
-  const headers = ['Post Title', 'Author/Source', 'Date Detected', 'URL/Link', 'Status'];
+  const headers = ['Post Title', 'Author/Source', 'Company', 'Date Detected', 'URL/Link', 'Status'];
   const rows = scanResults.map(p => [
     p.title || '(untitled)',
     p.profile_name || p.platform || '',
+    p.profile_company || '',
     p.detected_at || '',
     p.url || '',
     'New'
@@ -665,4 +637,3 @@ $('scanProgressCancel').onclick = () => {
 scanProgressModal.addEventListener('click', e => { if (e.target === scanProgressModal) closeScanProgress(); });
 
 loadAll();
-setInterval(loadAll, 30000);
