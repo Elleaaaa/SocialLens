@@ -198,22 +198,32 @@ def _get_state_file(platform):
     return None
 
 
-async def run_scan(fresh=False):
-    """Run a scan across all profiles.
+async def run_scan(profile_ids=None, fresh=False):
+    """Run a scan across profiles.
 
-    By default resumes from the first non-completed profile when a
-    previous interrupted scan left resumable state (completed profiles
-    are skipped, failed/cancelled/pending are retried). Pass fresh=True
-    to force a full re-scan from the beginning.
+    profile_ids: optional list of profile IDs to scan (company filter).
+                 If None, scans all profiles.
+    fresh=False (default) resumes from the first non-completed profile:
+    completed profiles are skipped, failed/cancelled/pending are retried.
+    fresh=True forces a full re-scan from the beginning.
     """
     conn = get_conn()
-    profiles = get_profiles()
+    all_profiles = get_profiles()
+
+    # Apply company filter: only scan the requested subset, preserving
+    # the order they appear in the DB.
+    if profile_ids is not None:
+        id_set = set(profile_ids)
+        profiles = [p for p in all_profiles if p["id"] in id_set]
+    else:
+        profiles = all_profiles
 
     print(f"=== Scan started at {datetime.now(timezone.utc).isoformat()} ===")
+    print(f"  - {len(profiles)} profile(s) in this scan")
     scan_state.init_progress(profiles, fresh=fresh)
 
     start_index = scan_state.get_resume_index()
-    if start_index > 0:
+    if start_index > 0 and not fresh:
         print(
             f"  - Resuming from profile #{start_index + 1} "
             f"({start_index} already completed)"
@@ -223,13 +233,18 @@ async def run_scan(fresh=False):
 
     for i in range(start_index, len(profiles)):
         profile = profiles[i]
-
+        # Skip profiles already completed in this session (resume).
+        # This is the critical fix: get_resume_index() returns only the
+        # FIRST non-completed profile, so the loop must individually
+        # skip any completed profiles that come after a failed/cancelled
+        # one — otherwise accounts already scanned get re-scanned.
+        if scan_state.get_profile_status(i) == "completed":
+            continue
         # Check for cancel before starting each profile
         if scan_state.is_cancelled():
             scan_state.set_cancelled_remaining(i)
             print("  - Scan cancelled by user")
             break
-
         scan_state.set_scanning(i)
 
         async with async_playwright() as p:
@@ -262,18 +277,22 @@ async def run_scan(fresh=False):
                         scan_profile(page, profile, conn),
                         timeout=SCAN_TIMEOUT_SEC,
                     )
-                    scan_state.set_completed(i, new_count, followers)
+                    # If cancel arrived during this profile's scan,
+                    # treat the profile as cancelled (not completed) so
+                    # resume re-scans it from the top.
+                    if scan_state.is_cancelled():
+                        scan_state.set_cancelled_remaining(i)
+                    else:
+                        scan_state.set_completed(i, new_count, followers)
                 except asyncio.TimeoutError:
                     print(f"  ! Timeout scanning {profile['name']}")
                     scan_state.set_failed(i, Exception("scan timeout"))
                 except Exception as exc:
                     print(f"  ! Error scanning {profile['name']}: {exc}")
                     scan_state.set_failed(i, exc)
-                finally:
-                    await page.close()
-                    await context.close()
             finally:
-                await browser.close()
+                await context.close()
+                await page.close()
 
         if i < len(profiles) - 1:
             await asyncio.sleep(DELAY_BETWEEN_PROFILES_SEC)

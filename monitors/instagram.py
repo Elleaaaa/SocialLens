@@ -303,7 +303,12 @@ class InstagramMonitor(BaseMonitor):
         return m.group(1) if m else None
 
     async def _get_post_date(self, shortcode):
-        """Extract the publish datetime from a post page."""
+        """Extract the publish datetime from a post page.
+        Non-blocking: tries query_selector (instant) instead of
+        wait_for_selector (8s timeout). Falls back to regex on the
+        page HTML. Returns None if no date is found, so the caller
+        keeps collecting rather than stopping.
+        """
         post_url = f"https://www.instagram.com/p/{shortcode}/"
         try:
             await self.page.goto(
@@ -311,7 +316,8 @@ class InstagramMonitor(BaseMonitor):
                 wait_until="domcontentloaded",
                 timeout=PAGE_TIMEOUT_MS,
             )
-            await self.page.wait_for_selector("time", timeout=8000)
+            # Non-blocking: returns immediately if no <time> element
+            # exists, instead of waiting 8 seconds for one to appear.
             times = await self.page.query_selector_all("time[datetime]")
             for t in times:
                 dt = await t.get_attribute("datetime")

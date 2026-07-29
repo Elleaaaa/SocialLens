@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS profile_metrics (
     captured_at TEXT NOT NULL,
     FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS scan_sessions (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    running INTEGER DEFAULT 0,
+    finished INTEGER DEFAULT 0,
+    snapshot TEXT
+);
 """
 
 _initialized = False
@@ -413,3 +421,35 @@ def get_recent_runs(conn, limit=50):
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ----------------------------------------------------------------------
+# Scan sessions (persistence for resume across refresh / restart)
+# ----------------------------------------------------------------------
+
+
+def create_scan_session(conn, session_id, created_at, snapshot):
+    """Insert a new scan session row."""
+    conn.execute(
+        """INSERT OR REPLACE INTO scan_sessions (id, created_at, running, finished, snapshot)
+           VALUES (?, ?, ?, ?, ?)""",
+        (session_id, created_at, 0, 0, snapshot),
+    )
+    conn.commit()
+
+
+def update_scan_session(conn, session_id, running, finished, snapshot):
+    """Update an existing scan session row."""
+    conn.execute(
+        """UPDATE scan_sessions SET running=?, finished=?, snapshot=? WHERE id=?""",
+        (1 if running else 0, 1 if finished else 0, snapshot, session_id),
+    )
+    conn.commit()
+
+
+def get_latest_scan_session(conn):
+    """Return the latest scan session snapshot (dict), or None."""
+    row = conn.execute(
+        "SELECT * FROM scan_sessions ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row else None

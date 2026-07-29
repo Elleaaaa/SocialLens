@@ -27,6 +27,12 @@
       <button id="refreshBtn"
         class="text-sm px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]">&#8635;
         Refresh</button>
+      <!-- Company filter for scan (pre-scan filter) -->
+      <select id="scanCompanyFilter"
+        class="text-sm px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]"
+        style="background:var(--card)">
+        <option value="">All Companies</option>
+      </select>
       <button id="runBtn" class="text-sm px-4 py-2 rounded-lg text-white font-semibold"
         style="background:linear-gradient(135deg,var(--accent),#7aa2ff)">&#9654; Run Scan</button>
       <form method="POST" action="/logout" style="display:inline-block">
@@ -121,7 +127,7 @@
 
   <footer class="text-center text-xs text-[var(--muted)] py-8">
     <!-- Social Lens &bull; Python + Playwright + FastAPI -->
-     Social Lens
+    Social Lens
   </footer>
 
   <!-- Add Profile Modal -->
@@ -143,8 +149,8 @@
       <input id="mName" placeholder="My Brand" class="w-full mb-3 p-2.5 rounded-lg border border-[var(--border)]"
         style="background:var(--bg)" />
       <label class="text-xs text-[var(--muted)] block mb-1">Company</label>
-      <input id="mCompany" placeholder="Acme Inc. (optional)" class="w-full mb-3 p-2.5 rounded-lg border border-[var(--border)]"
-        style="background:var(--bg)" />
+      <input id="mCompany" placeholder="Acme Inc. (optional)"
+        class="w-full mb-3 p-2.5 rounded-lg border border-[var(--border)]" style="background:var(--bg)" />
       <label class="text-xs text-[var(--muted)] block mb-1">Profile URL</label>
       <input id="mUrl" placeholder="https://www.instagram.com/username"
         class="w-full mb-4 p-2.5 rounded-lg border border-[var(--border)]" style="background:var(--bg)" />
@@ -156,53 +162,7 @@
     </div>
   </div>
 
-  <!-- Scan Results summary modal -->
-  <div id="scanModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4"
-    style="background:rgba(5,8,15,.7);backdrop-filter:blur(4px)">
-    <div class="card w-full max-w-3xl rounded-2xl overflow-hidden flex flex-col" style="max-height:88vh">
-      <header class="flex items-center justify-between gap-3 p-4 border-b border-[var(--border)]">
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold">Scan Results &mdash; New Posts Detected</h2>
-          <span id="scanNewBadge" class="badge live">0 new</span>
-        </div>
-        <button id="scanClose" class="text-[var(--muted)] hover:text-[var(--text)] text-xl leading-none"
-          aria-label="Close">&times;</button>
-      </header>
-
-      <div class="px-4 pt-3 text-xs text-[var(--muted)]">
-        Scan run: <span id="scanTime">&mdash;</span>
-      </div>
-
-      <div class="p-4 scroll-area">
-        <div id="scanEmpty" class="hidden text-center text-[var(--muted)] py-10">
-          No new posts detected in this scan.
-        </div>
-        <div id="scanTableWrap" class="overflow-x-auto">
-          <table>
-            <thead>
-              <tr>
-                <th>Post Title</th>
-                <th>Author/Source</th>
-                <th>Company</th>
-                <th>Date Posted</th>
-                <th>URL/Link</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="scanBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <footer class="flex items-center justify-end gap-2 p-4 border-t border-[var(--border)]">
-        <button id="scanExport" class="text-sm px-4 py-2 rounded-lg text-white font-semibold btn-disabled"
-          style="background:var(--accent)" disabled>Export to CSV</button>
-        <button id="scanDone" class="text-sm px-4 py-2 rounded-lg border border-[var(--border)]">Close</button>
-      </footer>
-    </div>
-  </div>
-
-  <!-- Scan progress dashboard modal -->
+  <!-- Scan progress dashboard modal (modal-locked during scan) -->
   <div id="scanProgressModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4"
     style="background:rgba(5,8,15,.8);backdrop-filter:blur(4px)">
     <div class="card w-full max-w-2xl rounded-2xl overflow-hidden flex flex-col" style="max-height:88vh">
@@ -211,10 +171,11 @@
           <span id="scanProgressSpinner" class="spinner"></span>
           <h2 class="text-base font-semibold" id="scanProgressTitle">Scan in progress&hellip;</h2>
         </div>
+        <!-- Cancel: only way to dismiss mid-scan -->
         <button id="scanProgressCancel"
-          class="text-sm px-3 py-1.5 rounded-lg border border-[var(--red)] text-[var(--red)] hover:bg-[rgba(248,113,113,.1)]">Cancel</button>
+          class="text-sm px-3 py-1.5 rounded-lg border border-[var(--red)] text-[var(--red)] hover:bg-[rgba(248,113,113,.1)]">Cancel
+          Scan</button>
       </header>
-
       <div class="ps-overview">
         <div class="flex items-center justify-between mb-2">
           <span id="scanProgressCount" class="ps-count">Starting&hellip;</span>
@@ -224,10 +185,22 @@
           <div id="scanProgressBar" class="ps-bar-fill"></div>
         </div>
       </div>
-
       <div class="ps-list-wrap">
+        <!-- Per-account list with live status badges -->
         <div id="scanProfileList" class="ps-list"></div>
       </div>
+      <!-- Summary footer (shown when scan completes; locked hidden during scan) -->
+      <footer id="scanProgressFooter"
+        class="hidden flex items-center justify-between gap-2 p-4 border-t border-[var(--border)]">
+        <div id="scanProgressSummary" class="text-sm text-[var(--muted)]"></div>
+        <div class="flex gap-2">
+          <button id="scanProgressRescan"
+            class="text-sm px-4 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]">Re-scan
+            All</button>
+          <button id="scanProgressClose" class="text-sm px-4 py-2 rounded-lg text-white font-semibold"
+            style="background:var(--accent)">Close</button>
+        </div>
+      </footer>
     </div>
   </div>
 

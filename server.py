@@ -520,6 +520,27 @@ def api_scan_progress():
     return scan_state.get_progress()
 
 
+@app.get("/api/scan/session")
+def api_scan_session():
+    """Return the latest scan session for resume detection on app load.
+
+    The frontend calls this on page load to check whether an incomplete
+    session exists. If running=true the scan is still in progress
+    (reattach the modal). If running=false but profiles are incomplete,
+    offer the user a resume.
+    """
+    prog = scan_state.get_progress()
+    has_incomplete = any(p["status"] != "completed" for p in prog["profiles"])
+    return {
+        "session_id": prog.get("session_id"),
+        "created_at": prog.get("created_at"),
+        "running": prog["running"],
+        "has_incomplete": has_incomplete,
+        "total": len(prog["profiles"]),
+        "completed": sum(1 for p in prog["profiles"] if p["status"] == "completed"),
+    }
+
+
 @app.post("/api/scan/cancel")
 def api_scan_cancel():
     """Request a graceful cancel (stops after the current profile)."""
@@ -529,30 +550,50 @@ def api_scan_cancel():
     return {"status": "cancel_requested"}
 
 
+class ScanRunBody(BaseModel):
+    """Optional JSON body for filtered scan execution."""
+
+    profile_ids: list[str] | None = None
+    fresh: bool = False
+
+
 @app.post("/api/scan/run")
-def api_trigger_scan(fresh: bool = False):
+def api_trigger_scan(body: ScanRunBody | None = None):
+    """Trigger a scan. Accepts an optional JSON body:
+
+        {"profile_ids": ["ig-abc123", ...], "fresh": false}
+
+    profile_ids filters which accounts to scan (company filter).
+    fresh=true forces a full re-scan ignoring prior session state.
+    """
     if scan_running.is_set():
         return {"status": "already_running"}
+
+    # Resolve body (also support query-param fallback for backward compat)
+    if body is None:
+        body = ScanRunBody()
 
     # Reset cancel flag. Do NOT clear_progress() here — init_progress()
     # inside run_scan() will resume from the previous interrupted scan
     # (keeping completed profiles) or start fresh when appropriate.
-    # Pass ?fresh=true to force a full re-scan.
     scan_state.reset_cancel()
 
     # Set the flag IMMEDIATELY so the frontend's first status poll sees
     # running=True (avoids a false "scan complete").
     scan_running.set()
 
+    profile_ids = body.profile_ids
+    fresh = body.fresh
+
     def _do_scan():
         from main import run_scan
 
         try:
-            asyncio.run(
-                asyncio.wait_for(run_scan(fresh=fresh), timeout=SCAN_TIMEOUT_SEC)
-            )
-        except asyncio.TimeoutError:
-            print("  ! Scan timed out")
+            # No whole-scan timeout — the per-profile timeout in
+            # run_scan() (asyncio.wait_for on each scan_profile call)
+            # already prevents individual profiles from hanging.
+            # The cancel button handles user-initiated stops.
+            asyncio.run(run_scan(profile_ids=profile_ids, fresh=fresh))
         except Exception as exc:
             print(f"  ! Scan thread crashed: {exc}")
         finally:

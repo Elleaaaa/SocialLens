@@ -325,3 +325,51 @@ select {
   height: 12px;
   border-width: 1.5px
 }
+
+/* ============================================================
+ * Scan progress modal — per-account badges + modal lock
+ * ============================================================ */
+
+.ps-overview { padding: 16px; }
+.ps-count { font-size: 0.875rem; color: var(--muted); }
+.ps-bar-track {
+  width: 100%; height: 8px; border-radius: 999px;
+  background: var(--border); overflow: hidden;
+}
+.ps-bar-fill {
+  height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #7aa2ff);
+  transition: width 0.4s ease;
+}
+.ps-list-wrap { flex: 1; overflow-y: auto; padding: 0 16px 16px; }
+.ps-list { display: flex; flex-direction: column; gap: 6px; }
+.ps-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.ps-item .ps-name { flex: 1; font-size: 0.875rem; }
+.ps-item .ps-meta { font-size: 0.75rem; color: var(--muted); }
+
+/* Status badges */
+.ps-badge {
+  font-size: 0.7rem; font-weight: 600; padding: 3px 10px;
+  border-radius: 999px; text-transform: uppercase; letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.ps-badge-queue    { background: rgba(100,116,139,.15); color: #94a3b8; }
+.ps-badge-ongoing  { background: rgba(59,130,246,.15);  color: #60a5fa; }
+.ps-badge-done     { background: rgba(34,197,94,.15);   color: #4ade80; }
+.ps-badge-failed   { background: rgba(248,113,113,.15); color: #f87171; }
+.ps-badge-cancelled{ background: rgba(168,85,247,.15);  color: #c084fc; }
+
+/* Modal lock: dim the cancel button while cancelling */
+.ps-cancelling #scanProgressCancel {
+  opacity: 0.5; pointer-events: none;
+}
+.ps-cancelling #scanProgressCancel::after {
+  content: '…'; 
+}
+
+/* Footer summary */
+#scanProgressFooter { gap: 12px; }
