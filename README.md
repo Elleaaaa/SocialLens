@@ -49,7 +49,7 @@ py -m venv .venv
 
 - Windows:
   ```powershell
-  .\.venv\Scripts\Activate.ps1
+  .\venv\Scripts\activate.bat
   ```
 - macOS / Linux:
   ```bash

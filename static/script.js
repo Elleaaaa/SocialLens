@@ -17,6 +17,11 @@ let postsLoaded = false;
 
 function toast(msg) { toastEl.textContent = msg; toastEl.classList.remove('hidden'); setTimeout(() => toastEl.classList.add('hidden'), 3000); }
 
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function timeAgo(iso) {
   if (!iso) return 'never';
   let s = iso;
@@ -106,6 +111,7 @@ async function loadProfiles() {
   profilePage = 0;
   renderProfiles();
   updateProfileFilter();
+  populateCompanyFilter();
 }
 
 function filteredProfiles() {
@@ -355,142 +361,132 @@ $('exportBtn').onclick = () => {
 $('refreshBtn').onclick = () => { loadAll(); toast('Data refreshed'); };
 
 /* ============================================================
- * Scan Results summary modal
+ * Scan Progress dashboard modal
+ *
+ * Server-driven model: POST /api/scan/run triggers the backend
+ * sequential loop. The client mirrors the backend via polling
+ * /api/scan/progress and renders per-account status badges.
+ *
+ * scanState mirrors the backend snapshot. Helper functions:
+ *   startScan    — trigger scan + open modal + begin polling
+ *   scanNext     — one poll cycle (fetch progress, render, check done)
+ *   cancelScan   — request graceful cancel, wait, close, toast
+ *   resumeScan   — re-trigger scan (resumes remaining accounts)
+ *   persistState — sync scanState from server payload
+ *   renderModalState — render scanState into the modal DOM
  * ============================================================ */
-const scanModal = $('scanModal');
-let scanResults = [];
 
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-function fmtDateTime(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
-
-function toPostArray(data) {
-  if (Array.isArray(data)) return data;
-  return (data && data.posts) ? data.posts : [];
-}
-
-async function showScanResults(scanStartedAt) {
-  try {
-    // Fetch only posts detected at/after the scan started. This is O(new posts)
-    // and uncapped, replacing the old baseline-diff that was capped at the
-    // /api/posts page size (the cause of the "99 new" ceiling).
-    // A 5s buffer tolerates browser/server clock skew; scans run for minutes
-    // so this never reaches a previous scan's posts.
-    const sinceIso = new Date(scanStartedAt - 5000).toISOString();
-    const q = new URLSearchParams({
-      per_page: '100000',
-      sort_by: 'detected_at',
-      sort_dir: 'desc',
-      since: sinceIso,
-    });
-    const data = await api('/api/posts?' + q.toString());
-    const newPosts = toPostArray(data);
-    openScanResults(newPosts, scanStartedAt);
-  } catch (e) {
-    console.error('scan results error', e);
-    toast('Could not load scan results: ' + e.message);
-  }
-}
-
-function openScanResults(newPosts, runTime) {
-  scanResults = newPosts;
-  const count = newPosts.length;
-  $('scanNewBadge').textContent = count + ' new';
-  $('scanTime').textContent = runTime ? new Date(runTime).toLocaleString() : '—';
-
-  const exportBtn = $('scanExport');
-  if (!count) {
-    $('scanEmpty').classList.remove('hidden');
-    $('scanTableWrap').classList.add('hidden');
-    exportBtn.disabled = true;
-    exportBtn.classList.add('btn-disabled');
-  } else {
-    $('scanEmpty').classList.add('hidden');
-    $('scanTableWrap').classList.remove('hidden');
-    exportBtn.disabled = false;
-    exportBtn.classList.remove('btn-disabled');
-    $('scanBody').innerHTML = newPosts.map(p => `
-      <tr>
-        <td>${escapeHtml(p.title || '(untitled)')}</td>
-        <td>${escapeHtml(p.profile_name || p.platform || '—')}</td>
-        <td>${escapeHtml(p.profile_company || '—')}</td>
-        <td>${fmtDateTime(p.detected_at)}</td>
-        <td><a href="${escapeHtml(p.url || '#')}" target="_blank"
-               class="text-[var(--accent)] hover:underline">Open</a></td>
-        <td><span class="badge live">New</span></td>
-      </tr>`).join('');
-  }
-  scanModal.classList.remove('hidden');
-  scanModal.classList.add('flex');
-}
-
-function closeScanResults() {
-  scanModal.classList.add('hidden');
-  scanModal.classList.remove('flex');
-}
-
-function csvCell(v) {
-  const s = String(v == null ? '' : v);
-  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-}
-
-function exportScanCSV() {
-  if (!scanResults.length) return;
-  const headers = ['Post Title', 'Author/Source', 'Company', 'Date Detected', 'URL/Link', 'Status'];
-  const rows = scanResults.map(p => [
-    p.title || '(untitled)',
-    p.profile_name || p.platform || '',
-    p.profile_company || '',
-    p.detected_at || '',
-    p.url || '',
-    'New'
-  ]);
-  const csv = [headers, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-  const d = new Date(), pad = n => String(n).padStart(2, '0');
-  const fname = `scan_results_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.csv`;
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = fname;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast('Exported ' + scanResults.length + ' new post(s)');
-}
-
-$('scanClose').onclick = closeScanResults;
-$('scanDone').onclick = closeScanResults;
-$('scanExport').onclick = exportScanCSV;
-scanModal.addEventListener('click', e => { if (e.target === scanModal) closeScanResults(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !scanModal.classList.contains('hidden')) closeScanResults();
-});
-
-/* ============================================================
- * Scan Progress dashboard modal (live logs + queue)
- * Polls /api/scan/progress for the live print() buffer and
- * renders it into #scanProfileList. Uses /api/scan/status only
- * to detect scan completion.
- * ============================================================ */
 const scanProgressModal = $('scanProgressModal');
 let scanProgressPoll = null;
-let lastLogLength = 0;
 
+// Client-side mirror of the backend scan_state snapshot.
+const scanState = {
+  running: false,
+  session_id: null,
+  created_at: null,
+  profiles: [],   // [{profile_id, name, platform, company, status, new_posts, followers, error}]
+};
+
+// ── Pre-scan company filter ────────────────────────────────────
+// Populate the company dropdown from loaded profiles (All + one per company).
+function populateCompanyFilter() {
+  const sel = $('scanCompanyFilter');
+  if (!sel) return;
+  const current = sel.value;
+  const companies = [...new Set(allProfiles.map(p => p.company).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">All Companies</option>';
+  companies.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    sel.appendChild(opt);
+  });
+  if (current) sel.value = current;
+}
+
+// Return profile IDs matching the selected company filter.
+function getFilteredProfileIds() {
+  const company = $('scanCompanyFilter').value;
+  if (!company) return null;  // null = all profiles
+  return allProfiles.filter(p => p.company === company).map(p => p.id);
+}
+
+// ── persistState: sync scanState from server payload ───────────
+function persistState(data) {
+  scanState.running = !!data.running;
+  scanState.session_id = data.session_id || null;
+  scanState.created_at = data.created_at || null;
+  scanState.profiles = (data.profiles || []).map(p => ({
+    profile_id: p.profile_id,
+    name: p.name,
+    platform: p.platform,
+    company: p.company || '',
+    status: p.status,
+    new_posts: p.new_posts || 0,
+    followers: p.followers,
+    error: p.error,
+  }));
+}
+
+// ── renderModalState: render scanState into modal DOM ───────────
+const STATUS_META = {
+  pending:    { label: 'Queue',     cls: 'ps-badge-queue' },
+  scanning:   { label: 'Ongoing',   cls: 'ps-badge-ongoing' },
+  completed:  { label: 'Done',      cls: 'ps-badge-done' },
+  failed:     { label: 'Failed',    cls: 'ps-badge-failed' },
+  cancelled:  { label: 'Cancelled', cls: 'ps-badge-cancelled' },
+};
+
+function renderModalState() {
+  const list = $('scanProfileList');
+  const profs = scanState.profiles;
+  const total = profs.length;
+
+  // Count completed for progress bar + count text.
+  const done = profs.filter(p => p.status === 'completed').length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+
+  $('scanProgressBar').style.width = pct + '%';
+  $('scanProgressPct').textContent = pct + '%';
+  $('scanProgressCount').textContent = total ? `Scanning ${done}/${total}` : 'Starting…';
+
+  // Render per-account rows with badges.
+  list.innerHTML = profs.map(p => {
+    const meta = STATUS_META[p.status] || STATUS_META.pending;
+    const platformColor = PLATFORM_COLORS[p.platform] || '#5b8cff';
+    const sub = p.status === 'completed'
+      ? `${p.new_posts} new post(s)`
+      : p.status === 'failed'
+        ? escapeHtml(p.error || 'error')
+        : p.status === 'cancelled'
+          ? 'skipped'
+          : '';
+    return `<div class="ps-item">
+      <span class="inline-grid place-items-center w-7 h-7 rounded font-bold text-xs flex-shrink-0"
+            style="background:${platformColor};color:#0b0f1a">${p.platform[0].toUpperCase()}</span>
+      <span class="ps-name">
+        ${escapeHtml(p.name)}
+        ${p.company ? '<span class="text-xs text-[var(--muted)] ml-1">(' + escapeHtml(p.company) + ')</span>' : ''}
+        ${sub ? '<span class="ps-meta ml-2">' + sub + '</span>' : ''}
+      </span>
+      <span class="ps-badge ${meta.cls}">${meta.label}</span>
+    </div>`;
+  }).join('');
+
+  // Auto-scroll to the currently-scanning profile.
+  const ongoingIdx = profs.findIndex(p => p.status === 'scanning');
+  if (ongoingIdx >= 0) {
+    const items = list.querySelectorAll('.ps-item');
+    if (items[ongoingIdx]) items[ongoingIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+// ── openScanProgress / closeScanProgress ────────────────────────
 function openScanProgress() {
   $('scanProgressTitle').textContent = 'Scan in progress…';
   const spin = $('scanProgressSpinner'); if (spin) spin.classList.remove('hidden');
-  $('scanProgressCount').textContent = 'Starting…';
-  $('scanProgressPct').textContent = '0%';
-  $('scanProgressBar').style.width = '0%';
-  $('scanProfileList').innerHTML = '<div class="ps-empty text-[var(--muted)] text-sm p-4">Initializing scan…</div>';
-  lastLogLength = 0;
+  $('scanProgressFooter').classList.add('hidden');
+  $('scanProgressModal').classList.remove('ps-cancelling');
+  $('scanProfileList').innerHTML = '<div class="text-[var(--muted)] text-sm p-4">Initializing scan…</div>';
   scanProgressModal.classList.remove('hidden');
   scanProgressModal.classList.add('flex');
 }
@@ -498,142 +494,218 @@ function openScanProgress() {
 function closeScanProgress() {
   scanProgressModal.classList.add('hidden');
   scanProgressModal.classList.remove('flex');
+  scanProgressModal.classList.remove('ps-cancelling');
 }
 
-// Normalize the /api/scan/progress payload into an array of strings.
-function toLogLines(data) {
-  if (Array.isArray(data)) return data.map(x => String(x));
-  if (typeof data === 'string') return data.split(/\r?\n/);
-  if (data && typeof data === 'object') {
-    if (Array.isArray(data.lines)) return data.lines.map(x => String(x));
-    if (Array.isArray(data.log)) return data.log.map(x => String(x));
-    if (Array.isArray(data.logs)) return data.logs.map(x => String(x));
-    if (typeof data.output === 'string') return data.output.split(/\r?\n/);
-    if (typeof data.text === 'string') return data.text.split(/\r?\n/);
+// ── Modal lock: during scan, block backdrop / Escape / X ────────
+// While scanning, the modal must NOT close via backdrop click or
+// Escape. Only the explicit Cancel button can dismiss it mid-scan.
+scanProgressModal.addEventListener('click', e => {
+  if (scanState.running && e.target === scanProgressModal) return;  // locked
+  if (!scanState.running && e.target === scanProgressModal) closeScanProgress();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !scanProgressModal.classList.contains('hidden')) {
+    if (scanState.running) return;  // locked during scan
+    closeScanProgress();
   }
-  return [];
-}
+});
 
-// Classify a log line for styling + queue semantics.
-function classifyLine(line) {
-  const t = line.trim();
-  if (!t) return { cls: 'ps-empty', icon: '' };
-  if (/^→.*Scanning/i.test(t) || /^Scanning/i.test(t))
-    return { cls: 'ps-active', icon: '⟳' };          // currently scanning
-  if (/^\[ALERT\]/.test(t) || /new post/i.test(t) || /posts found/i.test(t))
-    return { cls: 'ps-done', icon: '✓' };            // profile finished
-  if (/login|checkpoint|2fa|timed out|error|failed|skipping/i.test(t))
-    return { cls: 'ps-pending', icon: '!' };          // auth / warning
-  if (/Scroll|Followers|Loaded session|session still valid|Stopped early|Dated|Total posts/i.test(t))
-    return { cls: 'ps-info', icon: '·' };            // sub-step info
-  return { cls: 'ps-info', icon: '·' };
-}
-
-function renderScanLog(lines) {
-  const list = $('scanProfileList');
-  if (!lines.length) {
-    list.innerHTML = '<div class="ps-empty text-[var(--muted)] text-sm p-4">Waiting for scan output…</div>';
-    return;
+// ── beforeunload: warn user during active scan ─────────────────
+window.addEventListener('beforeunload', e => {
+  if (scanState.running) {
+    e.preventDefault();
+    e.returnValue = 'A scan is in progress. Leaving will interrupt it. You can resume after returning.';
+    return e.returnValue;
   }
-  list.innerHTML = lines.map(raw => {
-    const line = raw.replace(/\r$/, '');
-    if (!line.trim()) return '';
-    const { cls, icon } = classifyLine(line);
-    return `<div class="ps-item ${cls}"><span class="ps-ico">${icon}</span><span class="ps-name" style="white-space:pre-wrap;word-break:break-word">${escapeHtml(line)}</span></div>`;
-  }).join('');
-  // Auto-scroll to bottom so the newest line (current profile) is visible.
-  list.scrollTop = list.scrollHeight;
-}
+});
 
-// Derive a rough progress percentage from the log: count finished
-// profiles (ALERT / "posts found" lines) vs total profiles.
-function deriveProgress(lines) {
-  const total = allProfiles.length || 0;
-  if (!total) return null;
-  let done = 0;
-  for (const l of lines) {
-    if (/^\[ALERT\]/.test(l.trim()) || /\d+\s+posts found/i.test(l.trim())) done++;
-  }
-  if (done > total) done = total;
-  return Math.round((done / total) * 100);
-}
-
-function setScanProgressError(msg) {
-  $('scanProgressTitle').textContent = 'Scan error';
-  $('scanProgressCount').textContent = 'Error: ' + (msg || 'unknown');
-}
-
-// Poll /api/scan/progress for live logs AND /api/scan/status for completion.
-function startScanProgressPoll(scanStartedAt) {
-  if (scanProgressPoll) clearInterval(scanProgressPoll);
-  scanProgressPoll = setInterval(async () => {
-    // 1) Fetch live log buffer.
+// ── scanNext: one poll cycle ───────────────────────────────────
+function scanNext(scanStartedAt, onComplete) {
+  return async () => {
     try {
       const data = await api('/api/scan/progress');
-      const lines = toLogLines(data);
-      renderScanLog(lines);
-      const pct = deriveProgress(lines);
-      if (pct != null) {
-        $('scanProgressBar').style.width = pct + '%';
-        $('scanProgressPct').textContent = pct + '%';
-      }
-      // Status text: last non-empty line.
-      const last = [...lines].reverse().find(l => l.trim());
-      $('scanProgressCount').textContent = last ? last.trim().slice(0, 80) : 'Scanning…';
+      persistState(data);          // mirror backend into scanState
+      renderModalState();          // re-render badges + bar
     } catch (e) {
       console.error('progress fetch error', e);
     }
 
-    // 2) Check if the scan finished.
+    // Check if the scan finished (running flipped to false).
     try {
       const st = await api('/api/scan/status');
       if (!st.running) {
         clearInterval(scanProgressPoll); scanProgressPoll = null;
-        closeScanProgress();
-        $('runBtn').innerHTML = '▶ Run Scan';
-        $('runBtn').disabled = false;
-        $('statusBadge').className = 'badge live'; $('statusBadge').textContent = '● Idle';
-        scanning = false;
-        await loadAll();
-        await showScanResults(scanStartedAt);
+        if (onComplete) onComplete();
       }
     } catch (e) {
       console.error('status fetch error', e);
     }
-  }, 1500);
+  };
 }
 
-// Run Scan — captures baseline, triggers scan, opens progress modal, shows results.
-$('runBtn').onclick = async () => {
-  if (scanning) return;
-  scanning = true;
+// ── startScan: trigger scan + open modal + begin polling ───────
+async function startScan(profileIds, fresh = false) {
+  if (scanState.running) return;
+  scanState.running = true;
+
   openScanProgress();
 
   const scanStartedAt = Date.now();
   $('runBtn').innerHTML = '<span class="spinner"></span> Running…';
   $('runBtn').disabled = true;
   $('statusBadge').className = 'badge busy'; $('statusBadge').textContent = '● Running';
-  try { await api('/api/scan/run', { method: 'POST' }); toast('Scan started'); }
-  catch (e) {
+
+  try {
+    await api('/api/scan/run', {
+      method: 'POST',
+      body: JSON.stringify({ profile_ids: profileIds, fresh }),
+    });
+    toast('Scan started');
+  } catch (e) {
     toast('Failed: ' + e.message);
     closeScanProgress();
-    if (scanProgressPoll) { clearInterval(scanProgressPoll); scanProgressPoll = null; }
-    scanning = false;
-    $('runBtn').innerHTML = '▶ Run Scan';
-    $('runBtn').disabled = false;
-    $('statusBadge').className = 'badge live'; $('statusBadge').textContent = '● Idle';
+    scanState.running = false;
+    resetRunButton();
     return;
   }
 
-  startScanProgressPoll(scanStartedAt);
+  // Poll every 1.5s for live status updates.
+  scanProgressPoll = setInterval(
+    scanNext(scanStartedAt, () => onScanComplete(scanStartedAt)),
+    1500
+  );
+}
+
+// ── onScanComplete: show summary, unlock modal ─────────────────
+async function onScanComplete(scanStartedAt) {
+  // Final render with completed state.
+  try {
+    const data = await api('/api/scan/progress');
+    persistState(data);
+    renderModalState();
+  } catch (e) { /* ignore */ }
+
+  scanState.running = false;
+  resetRunButton();
+  $('scanProgressSpinner').classList.add('hidden');
+
+  // Show summary footer.
+  const profs = scanState.profiles;
+  const done = profs.filter(p => p.status === 'completed').length;
+  const failed = profs.filter(p => p.status === 'failed').length;
+  const cancelled = profs.filter(p => p.status === 'cancelled').length;
+  const newPosts = profs.reduce((s, p) => s + (p.new_posts || 0), 0);
+
+  let summary = `${done}/${profs.length} done`;
+  if (failed) summary += `, ${failed} failed`;
+  if (cancelled) summary += `, ${cancelled} cancelled`;
+  summary += ` — ${newPosts} new post(s)`;
+  $('scanProgressSummary').textContent = summary;
+
+  const allDone = done === profs.length;
+  $('scanProgressTitle').textContent = allDone ? 'Scan complete' : 'Scan stopped';
+  $('scanProgressFooter').classList.remove('hidden');
+
+  // Refresh dashboard data so new posts appear in the table.
+  await loadAll();
+}
+
+function resetRunButton() {
+  $('runBtn').innerHTML = '▶ Run Scan';
+  $('runBtn').disabled = false;
+  $('statusBadge').className = 'badge live'; $('statusBadge').textContent = '● Idle';
+}
+
+// ── cancelScan: graceful cancel, wait, close, toast ────────────
+async function cancelScan() {
+  if (!scanState.running) return;
+
+  // Request graceful cancel (stops after current profile finishes).
+  try { await api('/api/scan/cancel', { method: 'POST' }); } catch (e) { /* ignore */ }
+
+  // Show cancelling state — modal stays locked until backend confirms.
+  $('scanProgressTitle').textContent = 'Cancelling after current account…';
+  scanProgressModal.classList.add('ps-cancelling');
+  $('scanProgressCancel').disabled = true;
+
+  // Keep polling until running=false (current profile finishes).
+  const waitCancel = setInterval(async () => {
+    try {
+      const st = await api('/api/scan/status');
+      if (!st.running) {
+        clearInterval(waitCancel);
+        scanState.running = false;
+        resetRunButton();
+        closeScanProgress();
+        toast('Scan paused — click Run Scan to resume remaining accounts');
+        await loadAll();
+      } else {
+        // Still scanning the current profile; update badges.
+        const data = await api('/api/scan/progress');
+        persistState(data);
+        renderModalState();
+      }
+    } catch (e) { /* keep waiting */ }
+  }, 1500);
+}
+
+// ── resumeScan: re-trigger scan, resumes remaining accounts ─────
+async function resumeScan() {
+  // Passing the same profile_ids + fresh=false lets init_progress
+  // match the prior session by profile_id and skip completed ones.
+  await startScan(getFilteredProfileIds(), false);
+}
+
+// ── Run Scan button ────────────────────────────────────────────
+$('runBtn').onclick = async () => {
+  if (scanState.running) return;
+  await startScan(getFilteredProfileIds(), false);
 };
 
-// Close progress view without aborting the backend scan.
-$('scanProgressCancel').onclick = () => {
-  if (scanProgressPoll) { clearInterval(scanProgressPoll); scanProgressPoll = null; }
+// ── Cancel button ──────────────────────────────────────────────
+$('scanProgressCancel').onclick = cancelScan;
+
+// ── Close button (only enabled when scan is done) ──────────────
+$('scanProgressClose').onclick = closeScanProgress;
+
+// ── Re-scan All button (forces fresh full scan) ─────────────────
+$('scanProgressRescan').onclick = async () => {
   closeScanProgress();
-  toast('Progress view closed (scan continues in background)');
+  await startScan(null, true);  // null = all profiles, fresh=true
 };
-scanProgressModal.addEventListener('click', e => { if (e.target === scanProgressModal) closeScanProgress(); });
 
-loadAll();
+// ── On app load: check for incomplete session, offer resume ────
+async function checkResumeOnLoad() {
+  try {
+    const sess = await api('/api/scan/session');
+    if (!sess || !sess.session_id) return;
+
+    if (sess.running) {
+      // Scan is in progress (e.g. user refreshed the page mid-scan).
+      // Reattach: open modal and resume polling.
+      scanState.running = true;
+      openScanProgress();
+      $('runBtn').innerHTML = '<span class="spinner"></span> Running…';
+      $('runBtn').disabled = true;
+      $('statusBadge').className = 'badge busy'; $('statusBadge').textContent = '● Running';
+      scanProgressPoll = setInterval(
+        scanNext(Date.now(), () => onScanComplete(Date.now())),
+        1500
+      );
+      return;
+    }
+
+    if (sess.has_incomplete) {
+      // Previous scan was interrupted (cancel/crash). Offer resume.
+      const remaining = sess.total - sess.completed;
+      toast(`Previous scan incomplete (${remaining} remaining). Click Run Scan to resume.`);
+      // Change button label to indicate resume is available.
+      $('runBtn').innerHTML = '▶ Run Scan (Resume)';
+    }
+  } catch (e) {
+    console.error('resume check error', e);
+  }
+}
+
+loadAll().then(checkResumeOnLoad);
