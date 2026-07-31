@@ -10,7 +10,7 @@ def reset():
         DELETE FROM posts;
         DELETE FROM runs;
         DELETE FROM profile_metrics;
-        DELETE FROM profiles;
+        DELETE FROM scan_sessions;
         """)
     conn.commit()
     conn.close()

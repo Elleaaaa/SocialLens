@@ -24,10 +24,42 @@ from config import (
     PAGE_TIMEOUT_MS,
     FIRST_SCAN_DAYS_LIMIT,
     INSTAGRAM_SCROLL_ROUNDS,
+    POST_DATE_WAIT_MS,
 )
 
 SESSION_VALID_URL = "https://www.instagram.com/accounts/edit/"
 LOGIN_TIMEOUT_SEC = 300  # 5 minutes max to complete login
+
+
+def _extract_taken_at(data):
+    """Recursively search a JSON blob for taken_at_timestamp / taken_at (int)."""
+    if isinstance(data, dict):
+        for key in ("taken_at_timestamp", "taken_at"):
+            v = data.get(key)
+            if isinstance(v, int):
+                return v
+        for v in data.values():
+            r = _extract_taken_at(v)
+            if r:
+                return r
+    elif isinstance(data, list):
+        for v in data:
+            r = _extract_taken_at(v)
+            if r:
+                return r
+    return None
+
+
+def _epoch_to_iso(ts):
+    """Convert a Unix epoch (seconds) to ISO 8601 UTC string."""
+    from datetime import datetime, timezone
+
+    try:
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S+00:00"
+        )
+    except Exception:
+        return None
 
 
 class InstagramMonitor(BaseMonitor):
@@ -201,55 +233,91 @@ class InstagramMonitor(BaseMonitor):
         if not logged_in:
             return []
 
-        if not await self._navigate_to_profile():
-            print("  ! Could not load profile after login")
-            return []
+        # Attach the GraphQL listener BEFORE navigating to the profile,
+        # so we capture the initial page-load posts query (first ~12 posts).
+        # If attached after navigation, the first page's response is missed.
+        shortcode_dates = {}
 
-        print(f"  - Capturing posts from last {FIRST_SCAN_DAYS_LIMIT} days only")
+        async def _handle_response(response):
+            try:
+                if "graphql/query" not in response.url:
+                    return
+                ctype = response.headers.get("content-type", "")
+                if "json" not in ctype:
+                    return
+                data = await response.json()
+            except Exception:
+                return
+            self._collect_shortcode_dates(data, shortcode_dates)
 
-        print("  - Phase 1: collecting post shortcodes from grid...")
-        all_shortcodes = await self._scroll_grid_for_shortcodes(seen_shortcodes)
+        self.page.on("response", _handle_response)
+        try:
+            if not await self._navigate_to_profile():
+                print("  ! Could not load profile after login")
+                return []
 
-        new_shortcodes = [sc for sc in all_shortcodes if sc not in seen_shortcodes]
-        print(
-            f"  - {len(new_shortcodes)} new posts to date "
-            f"(of {len(all_shortcodes)} total)"
-        )
+            print(f"  - Capturing posts from last {FIRST_SCAN_DAYS_LIMIT} days only")
 
-        if not new_shortcodes:
-            print("  - No new posts to fetch dates for")
-            return []
-
-        # Phase 2: Visit each new post page to extract the date
-        posts = []
-        for shortcode in new_shortcodes:
-            published_at = await self._get_post_date(shortcode)
-            post_url = f"https://www.instagram.com/p/{shortcode}/"
-            if not published_at:
-                print(f"    -- {shortcode} -> no date found")
-            else:
-                # Stop if post is older than 7 days (applies to every scan)
-                if is_older_than_days(published_at, FIRST_SCAN_DAYS_LIMIT):
-                    print(
-                        f"  - Stopped: post {shortcode} is older than "
-                        f"{FIRST_SCAN_DAYS_LIMIT} days"
-                    )
-                    break
-            posts.append(
-                self.make_post(
-                    shortcode,
-                    "",
-                    post_url,
-                    published_at,
-                )
+            print("  - Phase 1: collecting post shortcodes + dates from grid...")
+            all_shortcodes = await self._scroll_grid_for_shortcodes(
+                seen_shortcodes, shortcode_dates
             )
-            await asyncio.sleep(DELAY_BETWEEN_POSTS_SEC)
 
-        print(f"  - Total: {len(posts)} new posts collected")
-        return posts
+            new_shortcodes = [sc for sc in all_shortcodes if sc not in seen_shortcodes]
+            print(
+                f"  - {len(new_shortcodes)} new posts to date "
+                f"(of {len(all_shortcodes)} total, "
+                f"{len(shortcode_dates)} dates captured)"
+            )
 
-    async def _scroll_grid_for_shortcodes(self, seen_shortcodes):
+            if not new_shortcodes:
+                print("  - No new posts to fetch dates for")
+                return []
+
+            # Phase 2: Build post list using captured dates.
+            # Only visit a post page individually if the GraphQL capture
+            # missed its date (rare fallback).
+            posts = []
+            for shortcode in new_shortcodes:
+                published_at = shortcode_dates.get(shortcode)
+                if not published_at:
+                    # Fallback: visit the post page directly.
+                    published_at = await self._get_post_date(shortcode)
+                post_url = f"https://www.instagram.com/p/{shortcode}/"
+                if not published_at:
+                    print(f"    -- {shortcode} -> no date found")
+                else:
+                    # Stop if post is older than 7 days (applies to every scan)
+                    if is_older_than_days(published_at, FIRST_SCAN_DAYS_LIMIT):
+                        print(
+                            f"  - Stopped: post {shortcode} is older than "
+                            f"{FIRST_SCAN_DAYS_LIMIT} days"
+                        )
+                        break
+                posts.append(
+                    self.make_post(
+                        shortcode,
+                        "",
+                        post_url,
+                        published_at,
+                    )
+                )
+                await asyncio.sleep(DELAY_BETWEEN_POSTS_SEC)
+
+            print(f"  - Total: {len(posts)} new posts collected")
+            return posts
+        finally:
+            try:
+                self.page.remove_listener("response", _handle_response)
+            except Exception:
+                pass
+
+    async def _scroll_grid_for_shortcodes(self, seen_shortcodes, shortcode_dates):
         """Scroll the Instagram grid to collect post shortcodes.
+
+        shortcode_dates is populated by the response listener attached
+        in fetch_posts (which captures GraphQL responses). This method
+        only reads from it for the progress log.
 
         Stops when hitting an already-seen post (incremental stop),
         or when the grid is exhausted.
@@ -289,11 +357,35 @@ class InstagramMonitor(BaseMonitor):
                 print(f"  - Grid exhausted after {len(all_shortcodes)} posts")
                 break
 
-            print(f"  - Scroll {scroll_round + 1}: {len(all_shortcodes)} shortcodes")
+            print(
+                f"  - Scroll {scroll_round + 1}: "
+                f"{len(all_shortcodes)} shortcodes, "
+                f"{len(shortcode_dates)} dates"
+            )
             await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await self.page.wait_for_timeout(2000)
 
         return all_shortcodes
+
+    @staticmethod
+    def _collect_shortcode_dates(data, out):
+        """Walk a GraphQL JSON blob and map shortcode -> ISO date.
+
+        The profile posts query returns media nodes containing an
+        identifier and a timestamp. Instagram renamed 'shortcode' to
+        'code' in recent schema updates, so we check both. The
+        timestamp is 'taken_at_timestamp' or 'taken_at' (Unix epoch).
+        """
+        if isinstance(data, dict):
+            sc = data.get("shortcode") or data.get("code")
+            ts = data.get("taken_at_timestamp") or data.get("taken_at")
+            if sc and isinstance(ts, int) and sc not in out:
+                out[sc] = _epoch_to_iso(ts)
+            for v in data.values():
+                InstagramMonitor._collect_shortcode_dates(v, out)
+        elif isinstance(data, list):
+            for v in data:
+                InstagramMonitor._collect_shortcode_dates(v, out)
 
     @staticmethod
     def _extract_shortcode(href):
@@ -303,35 +395,92 @@ class InstagramMonitor(BaseMonitor):
         return m.group(1) if m else None
 
     async def _get_post_date(self, shortcode):
-        """Extract the publish datetime from a post page.
-        Non-blocking: tries query_selector (instant) instead of
-        wait_for_selector (8s timeout). Falls back to regex on the
-        page HTML. Returns None if no date is found, so the caller
-        keeps collecting rather than stopping.
+        """Extract the publish datetime from a post or reel page.
+
+        /p/ and /reel/ URLs are interchangeable, so we always use /p/.
+
+        Instagram renders a <time> element showing relative text ("2H",
+        "3D") with the full date in its title attribute (the hover
+        tooltip) and/or its datetime attribute. We wait for the <time>
+        element to render, then read every attribute it carries.
+
+        Falls back to capturing the GraphQL/JSON XHR response (which
+        contains taken_at_timestamp as a Unix epoch).
+
+        Returns None if no date is found (caller keeps collecting).
         """
         post_url = f"https://www.instagram.com/p/{shortcode}/"
+        captured = {"ts": None}
+
+        async def _handle_response(response):
+            try:
+                ctype = response.headers.get("content-type", "")
+                if "json" not in ctype:
+                    return
+                if "instagram.com" not in response.url:
+                    return
+                data = await response.json()
+            except Exception:
+                return
+            ts = _extract_taken_at(data)
+            if ts:
+                captured["ts"] = ts
+
+        self.page.on("response", _handle_response)
         try:
-            await self.page.goto(
-                post_url,
-                wait_until="domcontentloaded",
-                timeout=PAGE_TIMEOUT_MS,
-            )
-            # Non-blocking: returns immediately if no <time> element
-            # exists, instead of waiting 8 seconds for one to appear.
-            times = await self.page.query_selector_all("time[datetime]")
+            try:
+                await self.page.goto(
+                    post_url,
+                    wait_until="domcontentloaded",
+                    timeout=PAGE_TIMEOUT_MS,
+                )
+            except Exception as exc:
+                print(f"    ! nav error for {shortcode}: {exc}")
+
+            # Wait for React to render the <time> element. This is the
+            # element that shows "2H" / "3D" and carries the date in its
+            # title (hover tooltip) and/or datetime attribute.
+            try:
+                await self.page.wait_for_selector("time", timeout=POST_DATE_WAIT_MS)
+            except Exception:
+                pass
+
+            # Read every attribute on every <time> element. The publish
+            # date (not a comment timestamp) is the FIRST <time> in the
+            # DOM, but we check all of them to be safe.
+            times = await self.page.query_selector_all("time")
             for t in times:
                 dt = await t.get_attribute("datetime")
                 if dt:
                     return dt
+                title = await t.get_attribute("title")
+                if title:
+                    return title
+
+            # Fallback: GraphQL/JSON XHR response captured by the listener.
+            if captured["ts"]:
+                return _epoch_to_iso(captured["ts"])
+
+            # Fallback: epoch embedded in page HTML/JSON.
             html = await self.page.content()
-            m = re.search(
-                r'datetime="(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+\dZ:.]+)"',
-                html,
-            )
+            m = re.search(r'"taken_at_timestamp"\s*:\s*(\d{10,})', html)
+            if m:
+                return _epoch_to_iso(int(m.group(1)))
+            m = re.search(r'"taken_at"\s*:\s*(\d{10,})', html)
+            if m:
+                return _epoch_to_iso(int(m.group(1)))
+
+            # Fallback: datePublished in JSON-LD.
+            m = re.search(r'"datePublished"\s*:\s*"([^"]+)"', html)
             if m:
                 return m.group(1)
         except Exception as exc:
             print(f"    ! date error for {shortcode}: {exc}")
+        finally:
+            try:
+                self.page.remove_listener("response", _handle_response)
+            except Exception:
+                pass
         return None
 
     async def fetch_stats(self):
