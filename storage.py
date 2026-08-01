@@ -227,8 +227,10 @@ def get_posts_filtered(
         conds.append("p.profile_id = ?")
         params.append(profile_id)
     if search:
-        conds.append("(p.title LIKE ? OR p.url LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        conds.append(
+            "(p.title LIKE ? OR p.url LIKE ? OR pr.name LIKE ? OR pr.company LIKE ?)"
+        )
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
     if detected_since:
         conds.append("p.detected_at >= ?")
         params.append(detected_since)
@@ -292,8 +294,10 @@ def get_posts_count(
         conds.append("p.profile_id = ?")
         params.append(profile_id)
     if search:
-        conds.append("(p.title LIKE ? OR p.url LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        conds.append(
+            "(p.title LIKE ? OR p.url LIKE ? OR pr.name LIKE ? OR pr.company LIKE ?)"
+        )
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
     if detected_since:
         conds.append("p.detected_at >= ?")
         params.append(detected_since)

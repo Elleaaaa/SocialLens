@@ -286,22 +286,21 @@ async function loadAll() {
   catch (e) { console.error(e); toast('Load error: ' + e.message); }
 }
 
-// Filter event listeners - only reload if posts already loaded
-$('fPlatform').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
-$('fProfile').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
+// Filter event listeners - reload immediately on any change
+$('fPlatform').addEventListener('change', () => { currentPage = 1; loadPosts(); });
+$('fProfile').addEventListener('change', () => { currentPage = 1; loadPosts(); });
 $('fSearch').addEventListener('input', () => {
-  if (!postsLoaded) return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { currentPage = 1; loadPosts(); }, 400);
 });
-$('fromDate').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
-$('toDate').addEventListener('change', () => { if (postsLoaded) { currentPage = 1; loadPosts(); } });
+$('fromDate').addEventListener('change', () => { currentPage = 1; loadPosts(); });
+$('toDate').addEventListener('change', () => { currentPage = 1; loadPosts(); });
 
 $('clearFilters').onclick = () => {
   $('fPlatform').value = ''; $('fProfile').value = '';
   $('fSearch').value = ''; $('fromDate').value = ''; $('toDate').value = '';
   currentPage = 1;
-  if (postsLoaded) loadPosts();
+  loadPosts();
 };
 $('loadPostsBtn').onclick = () => { currentPage = 1; loadPosts(); };
 
@@ -429,11 +428,11 @@ function persistState(data) {
 
 // ── renderModalState: render scanState into modal DOM ───────────
 const STATUS_META = {
-  pending:    { label: 'Queue',     cls: 'ps-badge-queue' },
-  scanning:   { label: 'Ongoing',   cls: 'ps-badge-ongoing' },
-  completed:  { label: 'Done',      cls: 'ps-badge-done' },
-  failed:     { label: 'Failed',    cls: 'ps-badge-failed' },
-  cancelled:  { label: 'Cancelled', cls: 'ps-badge-cancelled' },
+  pending: { label: 'Queue', cls: 'ps-badge-queue' },
+  scanning: { label: 'Ongoing', cls: 'ps-badge-ongoing' },
+  completed: { label: 'Done', cls: 'ps-badge-done' },
+  failed: { label: 'Failed', cls: 'ps-badge-failed' },
+  cancelled: { label: 'Cancelled', cls: 'ps-badge-cancelled' },
 };
 
 function renderModalState() {
