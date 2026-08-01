@@ -11,7 +11,6 @@ def reset():
         DELETE FROM runs;
         DELETE FROM profile_metrics;
         DELETE FROM scan_sessions;
-        DELETE FROM profiles;
         """)
     conn.commit()
     conn.close()
