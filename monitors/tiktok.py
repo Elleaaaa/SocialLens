@@ -70,6 +70,7 @@ class TikTokMonitor(BaseMonitor):
         self._username = self._extract_username(profile["url"])
         self._profile_url = f"https://www.tiktok.com/@{self._username}"
         self._logged_in = False
+        self._login_attempted = False
         self._sec_uid = None
 
     @staticmethod
@@ -107,26 +108,22 @@ class TikTokMonitor(BaseMonitor):
             print(f"  ! Could not save session: {exc}")
 
     async def _ensure_logged_in(self):
-        """Ensure we can access the TikTok profile page."""
-        if self._logged_in:
-            return True
-
+        """Ensure we can access the TikTok profile page.
+        Loads the saved session (if any) and checks if it is still
+        valid. Does NOT open a login page or wait for manual login —
+        if the session is invalid, returns False immediately so the
+        scan can proceed against the public profile anyway.
+        Caches the result so it only runs ONCE per monitor instance.
+        """
+        if self._login_attempted:
+            return self._logged_in
+        self._login_attempted = True
         await self._load_saved_session()
-
         if await self._is_session_valid():
             print("  - TikTok session still valid, skipping login")
             self._logged_in = True
             return True
-
-        print("  - TikTok login required. Please log in in the browser window.")
-        print(
-            f"  - Waiting up to {LOGIN_TIMEOUT_SEC // 60} minutes for you to log in..."
-        )
-
-        if await self._do_manual_login():
-            self._logged_in = True
-            return True
-
+        print("  - No valid TikTok session — proceeding without login")
         return False
 
     async def _is_session_valid(self):
@@ -266,9 +263,7 @@ class TikTokMonitor(BaseMonitor):
         """Get follower count from the TikTok profile page."""
         logged_in = await self._ensure_logged_in()
         if not logged_in:
-            self.followers = 0
-            return self.followers
-
+            print("  ! Not logged in — attempting scan anyway (public profile)")
         try:
             data = await self._fetch_universal_data(self._profile_url)
             if not data:
@@ -321,7 +316,8 @@ class TikTokMonitor(BaseMonitor):
         print(f"  - Capturing videos from last {FIRST_SCAN_DAYS_LIMIT} days only")
 
         if not await self._ensure_logged_in():
-            return []
+            print("  ! Not logged in — attempting scan anyway (public profile)")
+        # Primary: direct item_list API call.
 
         # Primary: direct item_list API call.
         posts = await self._fetch_posts_via_item_list_api(seen_shortcodes)

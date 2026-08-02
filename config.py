@@ -53,12 +53,10 @@ TIKTOK_SCROLL_ROUNDS = 5
 TIKTOK_STALE_SCROLLS = 5
 TIKTOK_SCROLL_DELAY_MS = 2000
 
-YT_API_KEY = os.environ.get("YT_API_KEY", "")
-
 MONITOR_API_KEY = os.environ.get("MONITOR_API_KEY", "")
 MAX_CONCURRENT_SCANS = 1
 SCAN_TIMEOUT_SEC = 3600
-LOGIN_TIMEOUT_SEC = 300
+LOGIN_TIMEOUT_SEC = 120
 
 # Auth credentials (for local/single-user use only)
 AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "sociallens")
