@@ -1,5 +1,60 @@
 # Social Monitor
 
+## FOR NKI
+
+1. Open **VS Code**.
+2. Open the **app/project folder** in VS Code.
+3. Open the VS Code terminal by pressing:
+
+   **Ctrl + Shift + `**
+
+---
+
+## STEP 1 — Log In to the Platform
+
+> **Do this once a week or before running the app** to log in to the platform locally and save the session state.
+
+In the VS Code terminal, run:
+
+```bash
+py main.py --login --platform instagram
+```
+
+Replace `instagram` with the platform you want to log in to:
+
+* `instagram`
+* `threads`
+* `tiktok`
+
+### TikTok Login Note
+
+If TikTok displays:
+
+> **"Maximum number of attempts reached"**
+
+Go back to **VS Code** and check the terminal. You should see:
+
+> **"Please enter here when done"**
+
+Follow the instructions shown in the terminal to continue.
+
+---
+
+## STEP 2 — Start the App
+
+In the VS Code terminal, run:
+
+```bash
+py server.py
+```
+
+Once the server starts, open the following link in your browser:
+
+http://127.0.0.1:8000
+
+You can now use the app.
+
+
 ## Overview
 
 This repository is a social media monitoring system that:
